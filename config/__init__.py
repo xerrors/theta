@@ -1,0 +1,168 @@
+import os
+import time
+import yaml
+import json
+import utils
+
+from transformers import AutoConfig
+
+
+class SimpleConfig(dict):
+
+    def __key(self, key):
+        return "" if key is None else key.lower()
+
+    def __str__(self):
+        return json.dumps(self)
+
+    def __setattr__(self, key, value):
+        self[self.__key(key)] = value
+
+    def __getattr__(self, key):
+        return self.get(self.__key(key))
+
+    def __getitem__(self, key):
+        return super().get(self.__key(key))
+
+    def __setitem__(self, key, value):
+        return super().__setitem__(self.__key(key), value)
+
+
+class Config(SimpleConfig):
+
+    def __init__(self, args, **kwargs):
+
+        if args.test_from_ckpt:
+            self.load_from_ckpt()
+            self.test_from_ckpt = args.test_from_ckpt
+            self.last_test_time = time.strftime(
+                "%Y-%m-%d_%H-%M-%S", time.localtime())
+            self.test_dir = os.path.join(
+                self.output_dir, f"test-result-{self.last_test_time}")
+            return
+
+        self.args = args
+        self.ext_config = kwargs
+
+        # 1. 从 args 中加载配置
+        self.__load_config_from_args()
+        self.__load_config(args.config)
+
+        # 2. 加载 model 和 dataset 的配置
+        self.model = self.parse_config(self.model_config, "model")
+        self.dataset = self.parse_config(self.dataset_config, "dataset")
+
+        # 3. 从 ext_config 中加载配置
+        self.__load_ext_config()
+        self.__replace_config_to_args()
+
+        # 4. 将配置文件保存到实验输出文件夹里面
+        self.handle_config()
+        self.prepare()
+
+        # 开始运行之前保存配置
+        self.save_config("config.pre.yaml")
+
+        # 创建一个快捷方式，类型是文件夹，指向 output_dir，如果此快捷方式已经存在就删除重新创建快捷方式
+        link = os.path.join(self.output, "latest")
+        # if os.path.exists(link) and os.path.islink(link):
+        #     os.remove(link)
+
+        dir_name = self.output_dir.split(os.sep)[-1]
+        try:
+            os.symlink(f"{dir_name}", link, target_is_directory=True)
+        except:
+            os.remove(link)
+            os.symlink(f"{dir_name}", link, target_is_directory=True)
+
+    def parse_config(self, config_file, config_type):
+        with open(config_file, 'r') as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+
+        parsed_config = SimpleConfig(config)
+
+        if config_type == "model":
+            model_config = AutoConfig.from_pretrained(
+                parsed_config.model_name_or_path)
+            parsed_config.update(model_config.to_dict())
+
+        return parsed_config
+
+    def handle_config(self):
+        # 创建此次实验的基本信息，运行时间，输出路径
+        self.start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+        self.output_dir = os.path.join(
+            self.output, f"ouput-{self.start}-{self.tag}")
+        os.makedirs(self.output_dir, exist_ok=True)
+
+        if self.debug and not self.test_from_ckpt:
+            self.output_dir = os.path.join(
+                self.output, "debug", f"{self.start}-{self.tag}")
+            os.makedirs(self.output_dir, exist_ok=True)
+
+        # 处理参数冲突
+        pass
+
+        # 快速验证模式
+        if self.fast_dev_run:
+            self.wandb = False
+            print(utils.blue_background(">>> FAST DEV RUN MODE <<<"))
+
+    def prepare(self):
+        # 设置日志等级
+        utils.config_logging(self)
+
+        # 配置 GPU
+        if self.gpu == "not specified":
+            self.gpu = utils.get_gpu_by_user_input()
+        os.environ['CUDA_VISIBLE_DEVICES'] = self.gpu
+
+    def save_best_model_path(self, path):
+        self.best_model_path = path
+        print(utils.green("Done!"), f"Best model saved at: {path}")
+
+    def save_config(self, filename="config.yaml"):
+        """将自身的所有属性都保存下来，不包含方法"""
+        config = {}
+        for key, value in self.items():
+            if isinstance(value, SimpleConfig):
+                items = {}
+                for k, v in value.items():
+                    if not k.startswith("__") and not callable(v):
+                        items[k] = v
+                config[key] = items
+
+            elif not key.startswith("__") and not callable(value) and not key == "args":
+                config[key] = value
+
+        with open(os.path.join(self.output_dir, filename), 'w') as f:
+            yaml.dump(config, f)
+
+    def load_from_ckpt(self, ckpt_path):
+        # 从 ckpt 中读取
+        with open(ckpt_path, 'r') as f:
+            ckpt = yaml.load(f, Loader=yaml.FullLoader)
+
+        for key, value in ckpt.items():
+            self.__setattr__(key, value)
+
+    def __load_config_from_args(self):
+        for key, value in vars(self.args).items():
+            self.__setattr__(key, value)
+
+    def __replace_config_to_args(self):
+        for key, value in vars(self.args).items():
+            if key in self.keys():
+                setattr(self.args, key, self[key])
+
+    def __load_config(self, config_file):
+        with open(config_file, 'r') as f:
+            config = yaml.load(f, Loader=yaml.FullLoader)
+
+        for key, value in config.items():
+            self.__setattr__(key, value)
+
+    def __load_ext_config(self):
+        """ 优先级最高 """
+        for key, value in self.ext_config.items():
+            self.__setattr__(key, value)

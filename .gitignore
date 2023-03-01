@@ -1,0 +1,24 @@
+# Dataset
+datasets/ace2005/English
+datasets/ace2005/corpus
+datasets/ace2005/fixed
+datasets/ace2005/json
+datasets/ace2005/result
+datasets/ace2005/text
+datasets/common/stanford-corenlp-full-2015-04-20
+datasets/common/stanford-postagger-2015-04-20
+datasets/unified
+
+
+# IDE
+.idea
+.vscode
+
+# tmp
+__pycache__
+
+# ouput
+output
+
+# jupyter
+test*.ipynb
