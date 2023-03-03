@@ -3,21 +3,26 @@ name: Joint Entity Relation Extraction
 # wandb
 wandb: True
 project: theta
-tag: default
+tag: ner
 
 # Run
-batch_size: 8
-max_epochs: 30
-lr: 0.0001
-decoder_lr: 0.001
+batch_size: 4
+test_batch_size: 8
+lr: 0.00001
+decoder_lr: 0.0001
 
 # Trainer
+max_epochs: 30
 # auto_lr: True
+# fast_dev_run: True
 
 # Model
-max_seq_len: 160
-model_config: models/albert.yaml
+max_seq_len: 180
+model_config: models/configs/albert.yaml
 
 # Dataset
 context_window: 0  # make sure that context_window < max_seq_len
 dataset_config: datasets/ace2005/ace2005.yaml
+
+# sub-task
+use_ner: 'BIO'
