@@ -89,6 +89,10 @@ class Config(SimpleConfig):
         return parsed_config
 
     def handle_config(self):
+        # 确认 tag，如果是函数传参调用的模式，就不需要确认 tag
+        if not self.with_ext_config:
+            self.tag = utils.confirm_tag(self.tag)
+
         # 创建此次实验的基本信息，运行时间，输出路径
         self.start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
         self.output_dir = os.path.join(
@@ -151,6 +155,10 @@ class Config(SimpleConfig):
             self.__setattr__(key, value)
 
     def __replace_config_to_args(self):
+
+        # 约定 batch_size
+        self.accumulate_grad_batches = self.global_batch_size // self.batch_size
+
         for key, value in vars(self.args).items():
             if key in self.keys():
                 setattr(self.args, key, self[key])
@@ -164,5 +172,9 @@ class Config(SimpleConfig):
 
     def __load_ext_config(self):
         """ 优先级最高 """
+        if len(self.ext_config) == 0:
+            return
+
+        self.with_ext_config = True
         for key, value in self.ext_config.items():
             self.__setattr__(key, value)

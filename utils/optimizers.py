@@ -17,24 +17,28 @@ def get_optimizer(theta, config):
     decoder_lr = config.get("decoder_lr", config.lr)
 
     optimizer_group_parameters = []
-    optimizer_group_parameters.extend(
-        get_params(theta, name="model", lr=model_lr))
-    optimizer_group_parameters.extend(get_params(
-        theta, name=None, lr=decoder_lr, added_list=["model"]))
+    optimizer_group_parameters.extend(get_params(theta, name="model", lr=model_lr))
+    optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=["model"]))
 
-    optimizer = AdamW(optimizer_group_parameters, lr=model_lr, eps=1e-8)
+    optimizer = AdamW(optimizer_group_parameters, lr=config.lr, eps=1e-8)
 
-    num_training_steps = calc_num_training_steps(theta)
-    scheduler = get_cosine_schedule_with_warmup(
-        optimizer, num_warmup_steps=num_training_steps*0.1, num_training_steps=num_training_steps)
-    return {
-        "optimizer": optimizer,
-        "lr_scheduler": {
-            'scheduler': scheduler,
-            'interval': 'step',  # or 'epoch'
-            'frequency': 1,
+    if config.warmup:
+        num_training_steps = calc_num_training_steps(theta)
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=num_training_steps*config.warmup,
+            num_training_steps=num_training_steps
+            )
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                'scheduler': scheduler,
+                'interval': 'step',  # or 'epoch'
+                'frequency': 1,
+            }
         }
-    }
+    else:
+        return optimizer
 
 
 def get_params(model, name, lr, exclude=[], added_list=[]):
@@ -104,9 +108,7 @@ def calc_num_training_steps(theta):
         dataset_size = len(trainer.datamodule.train_dataloader())
 
     # calc num devices
-    num_devices = max(1, trainer.num_gpus, trainer.num_processes)
-    if trainer.tpu_cores:
-        num_devices = max(num_devices, trainer.tpu_cores)
+    num_devices = max(1, trainer.num_devices)
 
     # calc max steps
     effective_batch_size = trainer.accumulate_grad_batches * num_devices
@@ -114,7 +116,7 @@ def calc_num_training_steps(theta):
         dataset_size // effective_batch_size) * trainer.max_epochs
 
     # check if max steps is limited by the user or system
-    if trainer.max_steps and trainer.max_steps < max_estimated_steps:
+    if trainer.max_steps > 0 and trainer.max_steps < max_estimated_steps:
         return trainer.max_steps
 
     return max_estimated_steps

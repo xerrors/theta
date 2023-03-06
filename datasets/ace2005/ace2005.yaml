@@ -6,4 +6,4 @@ train: datasets/ace2005/json/train.json
 val: datasets/ace2005/json/dev.json
 test: datasets/ace2005/json/test.json
 rels: ['ART', 'ORG-AFF', 'GEN-AFF', 'PHYS', 'PER-SOC', 'PART-WHOLE']
-ners: ['FAC', 'WEA', 'LOC', 'VEH', 'GPE', 'ORG', 'PER']
+ents: ['FAC', 'WEA', 'LOC', 'VEH', 'GPE', 'ORG', 'PER']

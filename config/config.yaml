@@ -1,28 +1,34 @@
 name: Joint Entity Relation Extraction
 
-# wandb
+# INFO: wandb
 wandb: True
 project: theta
-tag: ner
+tag: default
 
-# Run
-batch_size: 4
-test_batch_size: 8
-lr: 0.00001
-decoder_lr: 0.0001
+# INFO: Run
+batch_size: 16
+lr: 0.00003
+# decoder_lr: 0.00003
+# Achieved by gradient accumulation
+# accumulate_grad_batches will be set as global_batch_size // batch_size
+global_batch_size: 128
+warmup: 0.0
 
-# Trainer
+# INFO: Trainer
 max_epochs: 30
 # auto_lr: True
 # fast_dev_run: True
 
-# Model
+# INFO: Model
 max_seq_len: 180
-model_config: models/configs/albert.yaml
+model_config: models/configs/bert.yaml
 
-# Dataset
-context_window: 0  # make sure that context_window < max_seq_len
+# INFO: Dataset
+context_window: 180  # make sure that context_window < max_seq_len
 dataset_config: datasets/ace2005/ace2005.yaml
 
-# sub-task
-use_ner: 'BIO'
+# INFO: sub-task
+use_span: "BIO"
+use_rel_cls: "gold"
+use_ent_corres: ""
+use_rel_maps: ""

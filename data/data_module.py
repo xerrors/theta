@@ -12,24 +12,19 @@ class DataModule(pl.LightningDataModule):
     def __init__(self, config):
         super().__init__()
         self.config = config
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            config.model.model_name_or_path)
+        self.tokenizer = AutoTokenizer.from_pretrained(config.model.model_name_or_path)
 
         self.data_train = None
         self.data_val = None
         self.data_test = None
 
-        # self.tokenizer.add_special_tokens({'additional_special_tokens': gen_tokens(config)})
-
         self.rel_num = len(config.dataset.rels)
         self.id2rel = config.dataset.rels
-        self.rel2id = {name: idx for idx,
-                       name in enumerate(config.dataset.rels)}
+        self.rel2id = {name: idx for idx, name in enumerate(config.dataset.rels)}
 
-        self.ner_num = len(config.dataset.ners)
-        self.id2ner = config.dataset.ners
-        self.ner2id = {name: idx for idx,
-                       name in enumerate(config.dataset.ners)}
+        self.ner_num = len(config.dataset.ents)
+        self.id2ner = config.dataset.ents
+        self.ner2id = {name: idx for idx, name in enumerate(config.dataset.ents)}
 
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
@@ -59,10 +54,11 @@ class DataModule(pl.LightningDataModule):
         dataset = TensorDataset(
             features["input_ids"],
             features["attention_mask"],
-            features["ner_maps"],
-            features["rel_maps"],
+            features["pos"],
+            features["triples"],
+            features["span_maps"],
             features["ent_corres"],
-            features["pos"],)
+            )
 
         return dataset
 
@@ -70,9 +66,7 @@ class DataModule(pl.LightningDataModule):
         return DataLoader(self.data_train, shuffle=True, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True)
 
     def val_dataloader(self):
-        batch_size = self.config.batch_size if not self.config.test_batch_size else self.config.test_batch_size
-        return DataLoader(self.data_val, shuffle=False, batch_size=batch_size, num_workers=self.config.num_worker, pin_memory=True)
+        return DataLoader(self.data_val, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True)
 
     def test_dataloader(self):
-        batch_size = self.config.batch_size if not self.config.test_batch_size else self.config.test_batch_size
-        return DataLoader(self.data_test, shuffle=False, batch_size=batch_size, num_workers=self.config.num_worker, pin_memory=True)
+        return DataLoader(self.data_test, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True)

@@ -20,13 +20,12 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     # split == 1: return first 90% (train)
     # split == 2: return last 10% (dev)
 
-    EMPTY_TAG = 0
     samples = []
     num_ner = 0
     max_len = 0
     max_ner = 0
 
-    ner2id = {name: idx for idx, name in enumerate(config.dataset.ners)}
+    ner2id = {name: idx for idx, name in enumerate(config.dataset.ents)}
     rel2id = {name: idx for idx, name in enumerate(config.dataset.rels)}
 
     max_seq_len = config.get("max_seq_len", config.dataset.max_seq_len) # 最长的句子序列是 103
@@ -135,59 +134,61 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             start2idx = [i + sent_start for i in start2idx]
             end2idx = [i + sent_start for i in end2idx] # 因为有 cls token
 
-            # ner map
+            """关于命名实体识别的说明
+
+            TODO：暂时还不清楚是直接预测实体的边界和类型呢，还是先预测实体的边界在根据特征预测类型呢？
+
+            Rules:
+                - 使用 BIO 的标注方式
+                - 如果填充的是 0 则表示不是实体
+
+            Shape: [max_seq_len]
+
+            """
             ner_total_len = 0  # 记录 ner 的总长度，用于判断是否有重叠
             added = []  # 记录已经添加过的 ner，因为在文档 323 中存在同一个实体标注了两次，两次是不同的类型，这里以第二个类型为准
-            # ner_maps = torch.from_numpy(np.array([EMPTY_TAG for _ in range(len(tokenized_tokens))], dtype=np.int64))
-            ner_maps = torch.zeros(len(tokenized_tokens), dtype=torch.long).fill_(EMPTY_TAG)
+            span_maps = torch.zeros(len(tokenized_tokens), dtype=torch.long) # 0 表示不是实体
             for ner in sent.ner:
                 ent_s = start2idx[ner.span.start_sent]
                 ent_e = end2idx[ner.span.end_sent]
-                ner_maps[ent_s] = pow(2, ner2id[ner.label])
-                ner_maps[ent_s+1:ent_e] = ner_maps[ent_s] + 1
+                # 实体边界识别
+                span_maps[ent_s] = 1 # B
+                span_maps[ent_s+1:ent_e] = 2 # I
+
+                # 实体边界以及类型识别
+                # span_maps[ent_s] = ner2id[ner.label] * 2 + 1 # B
+                # span_maps[ent_s+1:ent_e] = ner2id[ner.label] * 2 + 2 # I
 
                 if ner.span not in added:
                     ner_total_len += ent_e - ent_s
                     added.append(ner.span)
 
-            assert ner_total_len == (ner_maps != EMPTY_TAG).sum(), 'NER overlap'
+            assert ner_total_len == (span_maps != 0).sum(), 'NER overlap'
 
-            # relation map (max_seq_lwn, max_seq_len)
-            # rel_maps = torch.zeros((max_seq_len, max_seq_len), dtype=torch.long)
-            # for rel in sent.relations:
-            #     sub_s = start2idx[rel.pair[0].start_sent]
-            #     sub_e = end2idx[rel.pair[0].end_sent]
-            #     obj_s = start2idx[rel.pair[1].start_sent]
-            #     obj_e = end2idx[rel.pair[1].end_sent]
-            #     # rel_maps[sub_s:sub_e, obj_s:obj_e] = pow(2, rel2id[rel.label])
-            #     rel_maps[sub_s:sub_e, obj_s:obj_e] = rel2id[rel.label] + 1  # 0 为 empty tag
-
-            # relation map (max_seq_len, rel_num * 2)
-            rel_maps = torch.zeros((max_seq_len, len(rel2id) * 2), dtype=torch.long)
             ent_corres = torch.zeros((max_seq_len, max_seq_len), dtype=torch.long)
+            triples = set()
 
             for rel in sent.relations:
 
                 sub_s = start2idx[rel.pair[0].start_sent]
-                sub_e = end2idx[rel.pair[0].end_sent]
+                sub_e = end2idx[rel.pair[0].end_sent] # 开区间
                 obj_s = start2idx[rel.pair[1].start_sent]
-                obj_e = end2idx[rel.pair[1].end_sent]
+                obj_e = end2idx[rel.pair[1].end_sent] # 开区间
+                triples.add((sub_s, sub_e, obj_s, obj_e, rel2id[rel.label]))
 
-                # 使用开始和结尾位置作为标注，应该回比使用 span 作为标注更好
-                rel_maps[sub_s:sub_e, rel2id[rel.label]] = 1
-                rel_maps[obj_s:obj_e, rel2id[rel.label] + len(rel2id)] = 1
+                ent_corres[sub_s:sub_e, obj_s:obj_e] = 1
 
-                ent_corres[sub_s, obj_s] = 1
-                ent_corres[sub_e-1, obj_e-1] = 1
-
+            max_tripes_count = config.get("max_tripes_count", 30)
+            assert len(triples) <= max_tripes_count, f"triples count {len(triples)} > {max_tripes_count}"
+            # 补全到最大的三元组数量
+            triples = list(triples) + [(-1, -1, -1, -1, -1)] * (max_tripes_count - len(triples))
 
             sample['input_ids'] = input_ids
-            sample['ner_maps'] = ner_maps
-            sample['rel_maps'] = rel_maps
-            sample['ent_corres'] = ent_corres
+            sample['triples'] = torch.tensor(triples, dtype=torch.long)
             sample['attention_mask'] = attention_mask
             sample['pos'] = torch.tensor((sent_start, sent_end, sent.sentence_ix, sent.sentence_start), dtype=torch.long)
-
+            sample['span_maps'] = span_maps
+            sample['ent_corres'] = ent_corres
             samples.append(sample)
 
     avg_length = sum([len(sample['tokens']) for sample in samples]) / len(samples)
@@ -197,47 +198,56 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
 
     input_ids = torch.stack([sample["input_ids"] for sample in samples])
     attention_mask = torch.stack([sample["attention_mask"] for sample in samples])
-    ner_maps = torch.stack([sample["ner_maps"] for sample in samples])
-    rel_maps = torch.stack([sample["rel_maps"] for sample in samples])
-    ent_corres = torch.stack([sample["ent_corres"] for sample in samples])
+    triples = torch.stack([sample["triples"] for sample in samples])
     pos = torch.stack([sample["pos"] for sample in samples])
+
+    if config.use_span:
+        span_maps = torch.stack([sample["span_maps"] for sample in samples])
+    else:
+        span_maps = torch.zeros((len(samples)), dtype=torch.long)
+
+    if config.use_ent_corres:
+        ent_corres = torch.stack([sample["ent_corres"] for sample in samples])
+    else:
+        ent_corres = torch.zeros((len(samples)), dtype=torch.long)
+
 
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
-        "ner_maps": ner_maps,
-        "rel_maps": rel_maps,
+        "pos": pos,
+        "triples": triples,
+        "span_maps": span_maps,
         "ent_corres": ent_corres,
-        "pos": pos
     }
 
-def extend_maps_to_one_hot(ner_maps, rel_maps, config):
-    """为了方便跟模型计算的结果比较，转为为 one-hot 的形式"""
-    # trans ner maps from b * max_seq_len to b * max_seq_len * len(config.dataset.ners)
-    ner_maps += 1  # 防止 np.log2(0) 报错
-    bsz, seq_len = ner_maps.size()
+# def extend_maps_to_one_hot(span_maps, rel_maps, config):
+#     """为了方便跟模型计算的结果比较，转为为 one-hot 的形式"""
+#     # trans ner maps from b * max_seq_len to b * max_seq_len * len(config.dataset.ents)
+#     span_maps += 1  # 防止 np.log2(0) 报错
+#     bsz, seq_len = span_maps.size()
 
-    new_ner_maps = []
-    for b in range(bsz):
-        ner_maps_b = np.zeros([seq_len, len(config.dataset.ners)], dtype=int)
-        for i in range(len(config.dataset.ners)):
-            ner_maps_b[:,i] = np.int_((np.log2(ner_maps[b].cpu())-1)==i)
-        new_ner_maps.append(ner_maps_b)
-    ner_maps = torch.tensor(new_ner_maps)
+#     new_span_maps = []
+#     for b in range(bsz):
+#         span_maps_b = np.zeros([seq_len, len(config.dataset.ents)], dtype=int)
+#         for i in range(len(config.dataset.ents)):
+#             span_maps_b[:,i] = np.int_((np.log2(span_maps[b].cpu())-1)==i)
+#         new_span_maps.append(span_maps_b)
+#     span_maps = torch.tensor(new_span_maps)
 
-    # trans rel maps from b * max_seq_len * max_seq_len to b * max_seq_len * max_seq_len * len(config.dataset.rels)
-    rel_maps += 1  # 防止 np.log2(0) 报错
-    bsz, seq_len, _ = rel_maps.size()
+#     # trans rel maps from b * max_seq_len * max_seq_len to b * max_seq_len * max_seq_len * len(config.dataset.rels)
+#     rel_maps += 1  # 防止 np.log2(0) 报错
+#     bsz, seq_len, _ = rel_maps.size()
 
-    new_rel_maps = []
-    for b in range(bsz):
-        rel_maps_b = np.zeros([seq_len, seq_len, len(config.dataset.rels)], dtype=int)
-        for i in range(len(config.dataset.rels)):
-            rel_maps_b[:,:,i] = np.int_((np.log2(rel_maps[b].cpu())-1)==i)
-        new_rel_maps.append(rel_maps_b)
-    rel_maps = torch.tensor(new_rel_maps)
+#     new_rel_maps = []
+#     for b in range(bsz):
+#         rel_maps_b = np.zeros([seq_len, seq_len, len(config.dataset.rels)], dtype=int)
+#         for i in range(len(config.dataset.rels)):
+#             rel_maps_b[:,:,i] = np.int_((np.log2(rel_maps[b].cpu())-1)==i)
+#         new_rel_maps.append(rel_maps_b)
+#     rel_maps = torch.tensor(new_rel_maps)
 
-    return ner_maps, rel_maps
+#     return span_maps, rel_maps
 
 
 # class NpEncoder(json.JSONEncoder):

@@ -4,10 +4,9 @@ from main import main
 
 # 根据 run_config 生成所有的组合
 run_config = {
-    "tag": "xjobs-run",
+    "tag": "large-lmhead",
     "gpu": "1",
-    "lr": [1e-4, 1e-5],
-    "decoder_lr": [1e-3, 1e-4, 1e-5],
+    "use_rel_cls": ['mean', 'head']
 }
 
 # 生成所有数组的组合

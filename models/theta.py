@@ -1,15 +1,33 @@
+import math
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-from transformers import AutoModel
+import itertools
 
-from models.components import MultiNonLinearClassifier
+from models.components import MultiNonLinearClassifier, SpanModel, REModel, EntityClassifier, EntityClassifierWithLMHead
 from utils.metrics import f1_score
-from utils.optimizers import get_optimizer
+from utils.optimizers import get_optimizer, calc_num_training_steps
 
-# from models.functions import convert_table_to_triplet
 
-# from data.utils import extend_maps_to_one_hot
+def getBertForMaskedLMClass(model_config):
+    if model_config.model_type == "roberta":
+        from transformers import RobertaForMaskedLM
+        return RobertaForMaskedLM
+    elif model_config.model_type == "bert":
+        from transformers import BertForMaskedLM
+        return BertForMaskedLM
+    elif model_config.model_type == "albert":
+        from transformers import AlbertForMaskedLM
+        return AlbertForMaskedLM
+
+def getPretrainedLMHead(model, model_config):
+    """获取预训练语言模型的头部 hidden_size -> vocab_size"""
+    if model_config.model_type == "roberta":
+        return model.lm_head
+    elif model_config.model_type == "bert":
+        return model.cls.predictions
+    elif model_config.model_type == "albert":
+        return model.predictions
 
 
 class Theta(pl.LightningModule):
@@ -20,7 +38,9 @@ class Theta(pl.LightningModule):
         self.config = config
         self.tokenizer = data.tokenizer
 
-        self.model = AutoModel.from_pretrained(config.model.model_name_or_path)
+        ModelClass = getBertForMaskedLMClass(config.model)
+        self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path)
+        self.lmhead = getPretrainedLMHead(self.plm_model, config.model) # 预训练语言模型的头部，并不占用额外参数
 
         # 常用参数
         self.lr = config.lr
@@ -30,40 +50,41 @@ class Theta(pl.LightningModule):
         self.bce_loss_fn = nn.BCEWithLogitsLoss(reduction='none')
 
         # Others
+        self.rel_num = len(config.dataset.rels)
+        self.ent_num = len(config.dataset.ents)
         self.na_idx = data.rel2id.get(config.dataset.na_label, None)
 
         # 模型评估
         self.best_f1 = 0
         self.test_f1 = 0
         # self.eval_fn = partial(f1_score, rel_num=config.dataset.rel_num, na_idx=self.na_idx)
-
+        self.extand_and_init_additional_tokens()
         self.register_components()
 
-    def register_components(self):
-        """ 用于构建除了预训练语言模型之外的所有模型组件
-        很多时候，使用哪些模型组件，使用哪些模块都是需要根据 config 来决定的，
-        如果放在 __init__ 中，会导致代码臃肿
-        """
+    def extand_and_init_additional_tokens(self):
+        """扩展并初始化额外的 token"""
         config = self.config
-        self.sub_cls = MultiNonLinearClassifier(
-            config.model.hidden_size * 2, 1)
-        self.obj_cls = MultiNonLinearClassifier(
-            config.model.hidden_size * 2, 1)
 
-        # 实体的映射表，用于计算实体的对应关系
-        self.ent_corres = MultiNonLinearClassifier(
-            config.model.hidden_size * 2, 1)
+        if self.na_idx is None:
+            rels = config.dataset.rels + ['NA']
+        else:
+            rels = config.dataset.rels
 
-        # 关系的 embedding，暂时还没有用到，后面会利用模型的参数来初始化这个 embedding
-        self.rel_embedding = nn.Embedding(
-            config.dataset.rel_num, config.model.hidden_size)  # 跟 nn.Parameter 有什么区别？
+        self.rel_tokens = [f"[R{i}]" for i in range(len(rels))]
+        # ent_type_ids = [f"[E{i}]" for i in range(self.ent_num + 1)]
+        # ent_base_ids = ["[SS]", "[SE]", "[OS]", "[OE]", "[ES]", "[EE]"]
 
-        # self.init_rel_embedding_weight()
+        # 扩展词表
+        special_tokens_dict = {'additional_special_tokens': self.rel_tokens}
+        self.tokenizer.add_special_tokens(special_tokens_dict)
+        self.plm_model.resize_token_embeddings(len(self.tokenizer))
 
-    def init_rel_embedding_weight(self):
-        """初始化关系的 embedding"""
-        # 每一个关系所对应的自然语言描述
-        ace_relation_mapping = {
+        self.rel_ids = self.tokenizer.convert_tokens_to_ids(self.rel_tokens)
+
+        # 初始化关系的词向量
+        word_embeddings = self.plm_model.get_input_embeddings().weight.data
+        ace_rel_map = {
+            'NA': 'no relation',
             'ART': 'artifact person',
             'ORG-AFF': 'organization affiliation',
             'GEN-AFF': 'general affiliation',
@@ -72,80 +93,162 @@ class Theta(pl.LightningModule):
             'PART-WHOLE': 'part whole'
         }
 
-        ace_relation_tokens = [self.tokenizer.tokenize(
-            ace_relation_mapping[rel]) for rel in self.config.dataset.rels]
+        ace_ids = [self.tokenizer.encode(ace_rel_map[rel], add_special_tokens=False) for rel in rels]
 
-        # 获取预训练的模型的embedding
-        model_embedding = self.model.embeddings.word_embeddings.weight
+        for i, rel_id in enumerate(self.rel_ids):
+            word_embeddings[rel_id] = word_embeddings[ace_ids[i]].clone().mean(dim=-2)
 
-        # 初始化 self.rel_embedding
-        for i, tokens in enumerate(ace_relation_tokens):
-            for token in tokens:
-                self.rel_embedding.weight.data[i] += model_embedding[self.tokenizer.vocab[token]]
+    def register_components(self):
+        """ 用于构建除了预训练语言模型之外的所有模型组件
+        很多时候，使用哪些模型组件，使用哪些模块都是需要根据 config 来决定的
+        """
+        config = self.config
 
-        self.rel_embedding.weight.data = self.rel_embedding.weight.data / \
-            len(ace_relation_tokens)  # 除以关系的数量
+        if self.config.use_rel_maps:
+            self.rel_embeddings = nn.Embedding(self.rel_num, self.hidden_size)
+            self.sub_cls = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
+            self.obj_cls = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
 
-    def forward(self, batch, return_details=False):
-        """Forward"""
+        if self.config.use_ent_corres:
+            self.ent_corres = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
 
-        input_ids, attention_mask, ner_maps, rel_maps, ent_corres, pos = batch
+        if config.use_rel_cls:
+            self.rel_model = REModel(self.config, self.rel_ids)
+
+        if config.use_span:
+            self.span_model = SpanModel(config.model, 3)
+
+    def forward(self, batch, mode="train"):
+        """Model forward
+
+        Args:
+            batch (tuple): batch data
+            return_loss (bool, optional): return loss or not. Defaults to True.
+        """
+
+        input_ids, attention_mask, pos, triples, span_maps, ent_corres = batch
 
         # Forward
-        outputs = self.model(input_ids, attention_mask=attention_mask)
+        outputs = self.plm_model(input_ids, attention_mask=attention_mask, output_hidden_states=True)
 
         # 一些参数
-        rel_num = rel_maps.shape[2] // 2
-        bsz, seq_len, h = outputs.last_hidden_state.shape
+        hidden_state = outputs.hidden_states[-1]
+        bsz, seq_len, h = hidden_state.shape
 
-        # 实体对应损失
-        ent_corres_pred = self.get_corres_tabel(
-            outputs.last_hidden_state, outputs.last_hidden_state)
+        output = {}
+        output["hidden_state"] = hidden_state
 
-        ent_corres_mask = torch.zeros_like(ent_corres_pred)
-        for b in range(bsz):
-            ent_corres_mask[b, pos[b, 0]:pos[b, 1], pos[b, 0]:pos[b, 1]] = 1
+        # [deprecated] 计算关系表
+        if self.config.use_rel_maps:
+            rel_tmp_idx = torch.arange(0, self.rel_num, device=input_ids.device)
+            rel_tmp_idx = rel_tmp_idx.unsqueeze(0).repeat(bsz, 1) # [bsz, rel_num]
+            rel_embedding = self.rel_embeddings(rel_tmp_idx) # [bsz, rel_num, h]
+            rel_embedding = rel_embedding.unsqueeze(1).expand(-1, seq_len, -1, -1)  # [bsz, seq_len, rel_num, h]
 
-        ent_corres_loss = self.bce_loss_fn(ent_corres_pred, ent_corres.float())
-        ent_corres_loss = (ent_corres_loss *
-                           ent_corres_mask).sum() / ent_corres_mask.sum()
+            seq_output = hidden_state.unsqueeze(2).expand(-1, -1, self.rel_num, -1)  # [bsz, seq_len, rel_num, h]
+            seq_output = torch.cat([seq_output, rel_embedding], dim=-1) # [bsz, seq_len, rel_num, h * 2]
 
-        # 计算关系表
-        rel_tmp_idx = torch.arange(
-            0, rel_num, device=input_ids.device).unsqueeze(0).repeat(bsz, 1)
-        rel_embedding = self.rel_embedding(rel_tmp_idx)
-        rel_embedding = rel_embedding.unsqueeze(
-            1).expand(-1, seq_len, -1, -1)  # [bsz, seq_len, rel_num, h]
+            sub_cls = self.sub_cls(seq_output).squeeze(-1) # [bsz, seq_len, rel_num]
+            obj_cls = self.obj_cls(seq_output).squeeze(-1) # [bsz, seq_len, rel_num]
 
-        seq_output = outputs.last_hidden_state.unsqueeze(
-            2).expand(-1, -1, rel_num, -1)  # [bsz, seq_len, rel_num, h]
-        # [bsz, seq_len, rel_num, h * 2]
-        seq_output = torch.cat([seq_output, rel_embedding], dim=-1)
-        # [bsz, seq_len, rel_num]
-        sub_cls = self.sub_cls(seq_output).squeeze(-1)
-        # [bsz, seq_len, rel_num]
-        obj_cls = self.obj_cls(seq_output).squeeze(-1)
+            rel_maps_logits = torch.cat([sub_cls, obj_cls], dim=-1) # [bsz, seq_len, rel_num * 2]
+            output["rel_maps_logits"] = rel_maps_logits
 
-        # [bsz, seq_len, rel_num * 2]
-        rel_maps_pred = torch.cat([sub_cls, obj_cls], dim=-1)
+        # [deprecated] 实体对应损失
+        if self.config.use_ent_corres:
+            ent_corres_logits = self.get_corres_tabel(hidden_state, hidden_state)
+            output["ent_corres_logits"] = ent_corres_logits
 
-        rel_mask = torch.zeros_like(rel_maps, dtype=torch.float32)
-        for b in range(bsz):
-            rel_mask[b, pos[b, 0]:pos[b, 1]] = 1
+        # [OPTIONAL] 命名实体识别损失
+        if self.config.use_span:
+            span_logits, span_loss = self.span_model(hidden_state, pos=pos, labels=span_maps)
+            output["span_logits"] = span_logits
 
-        rel_map_loss = self.bce_loss_fn(rel_maps_pred, rel_maps.float())
-        rel_map_loss = (rel_map_loss * rel_mask).sum() / rel_mask.sum()
+        entities = self.span_model.decode_entities(span_maps, pos=pos) # gold entities
+        # entities = self.span_model.decode_entities(span_logits, pos=pos) # pred entities
 
-        # Loss
-        loss = rel_map_loss + ent_corres_loss if ent_corres is not None else rel_map_loss
+        if self.config.use_rel_cls:
+            assert self.config.use_span, "need to use NER model to get entity position."
 
-        if return_details:
-            return loss, ent_corres_pred, rel_maps_pred
-        else:
-            return loss
+            ent_groups = []
+            for i, entity in enumerate(entities):
+                for ent_pair in itertools.permutations(entity, 2):
+                    sub_pos, end_pos = ent_pair
+                    ent_groups.append([i, sub_pos[0], sub_pos[1], end_pos[0], end_pos[1]])
+
+            if len(ent_groups) == 0:
+                rel_loss = torch.tensor(0.0, device=input_ids.device)
+                triples_pred = []
+
+            else:
+                rel_hidden_states = []
+                for ent in ent_groups:
+                    sub_hidden_state = hidden_state[ent[0], ent[1]]
+                    obj_hidden_state = hidden_state[ent[0], ent[3]]
+                    rel_hidden_state = obj_hidden_state - sub_hidden_state
+                    rel_hidden_states.append(rel_hidden_state)
+
+                rel_hidden_states = torch.stack(rel_hidden_states, dim=0)
+
+                # 注释：这里的 triples 是按照不同的 batch 来组织的，所以需要先把 triples 按照 ent_groups 的顺序来排序
+                triple_labels = torch.zeros(rel_hidden_states.shape[0], device=input_ids.device, dtype=torch.long)
+                for i, pair in enumerate(ent_groups):
+                    b = pair[0]
+                    for t in triples[b]:
+                        if t[-1] == -1:
+                            break
+                        if t[:-1].tolist() == pair[1:]:
+                            triple_labels[i] = t[-1] + 1
+                            break
+
+                rel_logits, rel_loss = self.rel_model(rel_hidden_states, lmhead=self.lmhead, labels=triple_labels)
+                triples_pred = [ent_groups[i] + [rel_logits[i].argmax().item()] for i in range(len(ent_groups))]
+
+            output["triples_pred"] = triples_pred
+            triples_gold_count = sum([len([t for t in t_ if t[-1] != -1]) for t_ in triples])
+            self.log("pred_triples_rate", (len(triples_pred) + 1) / (triples_gold_count+1))
+
+        # 计算损失
+        if mode != "test":
+
+            loss = torch.tensor(0.0, device=input_ids.device)
+
+            # [deprecated] 关系表损失
+            if self.config.use_rel_maps:
+                rel_maps = None # TODO
+                rel_mask = torch.zeros_like(rel_maps)
+                for b in range(bsz):
+                    rel_mask[b, pos[b, 0]:pos[b, 1]] = 1
+
+                rel_maps_loss = self.bce_loss_fn(rel_maps_logits, rel_maps.float())
+                rel_maps_loss = (rel_maps_loss * rel_mask).sum() / rel_mask.sum()
+                self.log("rel_map_loss", rel_maps_loss)
+
+            # [deprecated] 实体对应损失
+            if self.config.use_ent_corres:
+                ent_corres_mask = torch.zeros_like(ent_corres_logits)
+                for b in range(bsz):
+                    ent_corres_mask[b, pos[b, 0]:pos[b, 1], pos[b, 0]:pos[b, 1]] = 1
+
+                ent_corres_loss = self.bce_loss_fn(ent_corres_logits, ent_corres.float())
+                ent_corres_loss = (ent_corres_loss * ent_corres_mask).sum() / ent_corres_mask.sum()
+                self.log("corres_loss", ent_corres_loss)
+                loss += ent_corres_loss
+
+            if self.config.use_span:
+                self.log("span_loss", span_loss)
+                loss += span_loss
+
+            if self.config.use_rel_cls:
+                self.log("rel_loss", rel_loss)
+                loss += rel_loss
+
+            output["loss"] = loss
+
+        return output
 
     def get_corres_tabel(self, sub_hs, obj_hs, rel_hs=None):
-        """获取对应的关系表
+        """[deprecated] 获取对应的关系表
 
         Args:
             sub_hs (torch.Tensor): [bsz, seq_len, h]
@@ -170,49 +273,77 @@ class Theta(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
 
-        loss = self(batch)
+        loss = self(batch, mode="train")["loss"]
+        self.log('train_loss', loss)
 
-        self.log('train_loss', loss, on_step=True)
+        lr_step = {}
+        for i, pg in enumerate(self.optimizers().param_groups):
+            lr_step[f"lr_{i}"] = pg["lr"]
+        self.log_dict(lr_step)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        input_ids, attention_mask, ner_maps, rel_maps, ent_corres, pos = batch
-        loss, ent_corres_pred, rel_maps_pred = self(batch, return_details=True)
-        self.log('val_loss', loss, on_step=True)
+        input_ids, _, _, triples, _, _  = batch
+        output = self(batch, mode="dev")
 
-        pred_triples = self.deocde_triples(
-            ent_corres_pred.sigmoid(), rel_maps_pred.sigmoid(), input_ids, pos)
-        trgt_triples = self.deocde_triples(
-            ent_corres, rel_maps, input_ids, pos)
+        pred_triples = set()
+        for t in output["triples_pred"]:
+            if t[5] != 0:
+                sub_token = self.tokenizer.decode(input_ids[t[0], t[1]:t[2]])
+                obj_token = self.tokenizer.decode(input_ids[t[0], t[3]:t[4]])
+                pred_triples.add((sub_token, obj_token, self.config.dataset.rels[t[5]-1]))
+
+        gold_triples = set()
+        for b in range(input_ids.shape[0]):
+            for t in triples[b]:
+                if t[4] != -1:
+                    sub_token = self.tokenizer.decode(input_ids[b, t[0]:t[1]])
+                    obj_token = self.tokenizer.decode(input_ids[b, t[2]:t[3]])
+                    gold_triples.add((sub_token, obj_token, self.config.dataset.rels[t[4]]))
+                else:
+                    break
+
+        loss = output["loss"]
+        self.log('val_loss', loss)
 
         return {
-            'pred_triplets': pred_triples,
-            'trgt_triplets': trgt_triples,
+            'pred_triples': pred_triples,
+            'gold_triples': gold_triples,
         }
 
     def validation_epoch_end(self, outputs):
-
         f1, p, r = f1_score(outputs)
 
         self.best_f1 = max(f1, self.best_f1)
-        self.log('val_f1', f1, on_epoch=True, prog_bar=True)
-        self.log('best_f1', self.best_f1, on_epoch=True, prog_bar=True)
+        self.log_dict_values({'val_p': p, 'val_r': r})
+        self.log_dict_values({'val_f1': f1, 'best_f1': self.best_f1}, on_epoch=True, prog_bar=True)
 
     def test_step(self, batch, batch_idx):
 
-        input_ids, attention_mask, ner_maps, rel_maps, ent_corres, pos = batch
-        loss, ent_corres_pred, rel_maps_pred = self(batch, return_details=True)
-        self.log('test_loss', loss, on_step=True, on_epoch=True)
+        input_ids, _, _, triples, _, _  = batch
+        output = self(batch, mode="test")
 
-        pred_triples = self.deocde_triples(
-            ent_corres_pred.sigmoid(), rel_maps_pred.sigmoid(), input_ids, pos)
-        trgt_triples = self.deocde_triples(
-            ent_corres, rel_maps, input_ids, pos)
+        pred_triples = set()
+        for t in output["triples_pred"]:
+            if t[5] != 0:
+                sub_token = self.tokenizer.decode(input_ids[t[0], t[1]:t[2]])
+                obj_token = self.tokenizer.decode(input_ids[t[0], t[3]:t[4]])
+                pred_triples.add((sub_token, obj_token, self.config.dataset.rels[t[5]-1]))
+
+        gold_triples = set()
+        for b in range(input_ids.shape[0]):
+            for t in triples[b]:
+                if t[4] != -1:
+                    sub_token = self.tokenizer.decode(input_ids[b, t[0]:t[1]])
+                    obj_token = self.tokenizer.decode(input_ids[b, t[2]:t[3]])
+                    gold_triples.add((sub_token, obj_token, self.config.dataset.rels[t[4]]))
+                else:
+                    break
 
         return {
-            'pred_triplets': pred_triples,
-            'trgt_triplets': trgt_triples,
+            'pred_triples': pred_triples,
+            'gold_triples': gold_triples,
         }
 
     def test_epoch_end(self, outputs):
@@ -220,21 +351,61 @@ class Theta(pl.LightningModule):
         f1, p, r = f1_score(outputs)
 
         self.test_f1 = f1
-        self.log('test_f1', f1)
+        self.log_dict_values({'test_f1': f1, 'test_p': p, 'test_r': r})
 
     # Optimizer https://pytorch-lightning.readthedocs.io/en/stable/api/pytorch_lightning.core.LightningModule.html#pytorch_lightning.core.LightningModule.configure_optimizers
-
     def configure_optimizers(self):
         return get_optimizer(self, self.config)
 
-    def deocde_triples(self, ent_corres, rel_maps, input_ids, pos):
-        """Convert table to triplet
+    def decode_label_triples(self, ent_corres, rel_maps, input_ids, pos):
+        """Convert table to triplet, can be used for ground truth"""
+
+        bsz, seq_len, rel_num = rel_maps.shape[0], rel_maps.shape[1], rel_maps.shape[2] // 2
+
+        triples = set()
+        for b in range(bsz):
+            sent_start_token_idx, sent_end_token_idx = pos[b, 0], pos[b, 1]
+            for rel in range(rel_num):
+                sub_seq = rel_maps[b, :, rel]
+                obj_seq = rel_maps[b, :, rel + rel_num]
+
+                # 遍历实体序列，连续为 1 的序列为一个实体，并记录下来起始位置
+                sub_entities = []  # 解码出的是闭区间
+                for s_i in range(sent_start_token_idx, sent_end_token_idx):
+                    if sub_seq[s_i] == 1:
+                        if len(sub_entities) == 0 or sub_entities[-1][1] != s_i:
+                            sub_entities.append([s_i, s_i])
+                        else:
+                            sub_entities[-1][1] = s_i
+
+                obj_entities = []  # 闭区间
+                for o_i in range(sent_start_token_idx, sent_end_token_idx):
+                    if obj_seq[o_i] == 1:
+                        if len(obj_entities) == 0 or obj_entities[-1][1] != o_i:
+                            obj_entities.append([o_i, o_i])
+                        else:
+                            obj_entities[-1][1] = o_i
+
+                for sub in sub_entities:
+                    for obj in obj_entities:
+                        if ent_corres[b, sub[0], obj[0]] == 1: # 2023/03/04 仅使用起始位置的分数
+                            sub_token = self.tokenizer.decode(input_ids[b, sub[0]:sub[1]+1])
+                            obj_token = self.tokenizer.decode(input_ids[b, obj[0]:obj[1]+1])
+                            rel_name = self.config.dataset.rels[rel]
+                            triples.add((sub_token, obj_token, rel_name))
+
+        return triples
+
+    def deocde_triples(self, ent_corres, rel_maps, input_ids, pos, with_confidence=False):
+        """Convert table to triplet, can be used for both prediction and ground truth
 
         Args:
             ent_corres (torch.Tensor): [bsz, seq_len, seq_len]
             rel_maps (torch.Tensor): [bsz, seq_len, rel_num * 2]
             input_ids (torch.Tensor): [bsz, seq_len]
             pos (torch.Tensor): [bsz, 4] # sent_start, sent_end, sentence_ix, sentence_start_in_doc
+            with_confidence (bool, optional): [description]. Defaults to False. Use confidence \
+                to filter out low confidence triples.
 
         """
         ent_threshold = 0.5
@@ -250,7 +421,7 @@ class Theta(pl.LightningModule):
                 obj_seq = rel_maps[b, :, rel + rel_num]
 
                 # 遍历实体序列，连续为 1 的序列为一个实体，并记录下来起始位置
-                sub_entities = []  # 闭区间
+                sub_entities = []  # 解码出的是闭区间
                 for s_i in range(sent_start_token_idx, sent_end_token_idx):
                     if sub_seq[s_i] > ent_threshold:
                         if len(sub_entities) == 0 or sub_entities[-1][1] != s_i:
@@ -268,15 +439,25 @@ class Theta(pl.LightningModule):
 
                 for sub in sub_entities:
                     for obj in obj_entities:
-                        if ent_corres[b, sub[0], obj[0]] + ent_corres[b, sub[1], obj[1]] > rel_threshold * 2:
-                            sub_token = self.tokenizer.decode(
-                                input_ids[b, sub[0]:sub[1]+1])
-                            obj_token = self.tokenizer.decode(
-                                input_ids[b, obj[0]:obj[1]+1])
+                        start_score = ent_corres[b, sub[0], obj[0]] # 2023/03/04 仅使用起始位置的分数
+
+                        if with_confidence:
+                            sub_token = self.tokenizer.decode(input_ids[b, sub[0]:sub[1]+1])
+                            obj_token = self.tokenizer.decode(input_ids[b, obj[0]:obj[1]+1])
+                            rel_name = self.config.dataset.rels[rel]
+                            triples.add((sub_token, obj_token, rel_name, start_score.item()))
+
+                        elif start_score > rel_threshold:
+                            sub_token = self.tokenizer.decode(input_ids[b, sub[0]:sub[1]+1])
+                            obj_token = self.tokenizer.decode(input_ids[b, obj[0]:obj[1]+1])
                             rel_name = self.config.dataset.rels[rel]
                             triples.add((sub_token, obj_token, rel_name))
 
         return triples
+
+    def log_dict_values(self, d, **kwargs):
+        for k, v in d.items():
+            self.log(k, v, **kwargs)
 
     # def convert_table_to_triplet(self, table, input_ids, pos):
     #     """Convert table to triplet"""
