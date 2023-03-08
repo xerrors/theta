@@ -91,7 +91,10 @@ class Config(SimpleConfig):
     def handle_config(self):
         # 确认 tag，如果是函数传参调用的模式，就不需要确认 tag
         if not self.with_ext_config:
-            self.tag = utils.confirm_tag(self.tag)
+            self.tag = utils.confirm_value("tag", self.tag)
+
+            if self.debug and self.wandb:
+                self.wandb = utils.confirm_bool("wandb", self.wandb)
 
         # 创建此次实验的基本信息，运行时间，输出路径
         self.start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())

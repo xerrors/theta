@@ -116,7 +116,7 @@ class Theta(pl.LightningModule):
             self.rel_model = REModel(self.config, self.rel_ids)
 
         if config.use_span:
-            self.span_model = SpanModel(config.model, 3)
+            self.span_model = SpanModel(config, 3)
 
     def forward(self, batch, mode="train"):
         """Model forward
@@ -170,39 +170,10 @@ class Theta(pl.LightningModule):
         if self.config.use_rel_cls:
             assert self.config.use_span, "need to use NER model to get entity position."
 
-            ent_groups = []
-            for i, entity in enumerate(entities):
-                for ent_pair in itertools.permutations(entity, 2):
-                    sub_pos, end_pos = ent_pair
-                    ent_groups.append([i, sub_pos[0], sub_pos[1], end_pos[0], end_pos[1]])
+            ent_groups, rel_hidden_states, triple_labels = self.rel_model.prepare(triples, hidden_state, entities)
 
-            if len(ent_groups) == 0:
-                rel_loss = torch.tensor(0.0, device=input_ids.device)
-                triples_pred = []
-
-            else:
-                rel_hidden_states = []
-                for ent in ent_groups:
-                    sub_hidden_state = hidden_state[ent[0], ent[1]]
-                    obj_hidden_state = hidden_state[ent[0], ent[3]]
-                    rel_hidden_state = obj_hidden_state - sub_hidden_state
-                    rel_hidden_states.append(rel_hidden_state)
-
-                rel_hidden_states = torch.stack(rel_hidden_states, dim=0)
-
-                # 注释：这里的 triples 是按照不同的 batch 来组织的，所以需要先把 triples 按照 ent_groups 的顺序来排序
-                triple_labels = torch.zeros(rel_hidden_states.shape[0], device=input_ids.device, dtype=torch.long)
-                for i, pair in enumerate(ent_groups):
-                    b = pair[0]
-                    for t in triples[b]:
-                        if t[-1] == -1:
-                            break
-                        if t[:-1].tolist() == pair[1:]:
-                            triple_labels[i] = t[-1] + 1
-                            break
-
-                rel_logits, rel_loss = self.rel_model(rel_hidden_states, lmhead=self.lmhead, labels=triple_labels)
-                triples_pred = [ent_groups[i] + [rel_logits[i].argmax().item()] for i in range(len(ent_groups))]
+            rel_logits, rel_loss = self.rel_model(rel_hidden_states, lmhead=self.lmhead, labels=triple_labels)
+            triples_pred = [ent_groups[i] + [rel_logits[i].argmax().item()] for i in range(len(ent_groups))]
 
             output["triples_pred"] = triples_pred
             triples_gold_count = sum([len([t for t in t_ if t[-1] != -1]) for t_ in triples])
@@ -239,13 +210,14 @@ class Theta(pl.LightningModule):
                 self.log("span_loss", span_loss)
                 loss += span_loss
 
-            if self.config.use_rel_cls:
+            if self.config.use_rel_cls and rel_loss: # 有时是 None
                 self.log("rel_loss", rel_loss)
                 loss += rel_loss
 
             output["loss"] = loss
 
         return output
+
 
     def get_corres_tabel(self, sub_hs, obj_hs, rel_hs=None):
         """[deprecated] 获取对应的关系表

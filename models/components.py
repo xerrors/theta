@@ -1,3 +1,4 @@
+import itertools
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
@@ -38,8 +39,14 @@ class SpanModel(pl.LightningModule):
         self.config = config
         self.num_labels = num_labels
 
-        self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, self.num_labels)
+        self.dropout = nn.Dropout(config.model.hidden_dropout_prob)
+
+        if config.use_span == 'classifier':
+            self.classifier = nn.Linear(config.model.hidden_size, self.num_labels)
+        elif config.use_span == 'multi_classifier':
+            self.classifier = MultiNonLinearClassifier(config.model.hidden_size, self.num_labels)
+        else:
+            raise NotImplementedError(f"config.use_span={config.use_span} is not implemented!")
 
         # self.classifier = nn.Sequential(
         #     FeedForward(input_dim=config.hidden_size,
@@ -106,11 +113,55 @@ class REModel(pl.LightningModule):
         self.config = config
         self.rel_ids = rel_ids
         # self.lmhead = lmhead
-        # self.classifier = MultiNonLinearClassifier(config.model.hidden_size, len(rel_ids))
+        if config.use_rel_cls == 'multi_classifier':
+            self.classifier = MultiNonLinearClassifier(config.model.hidden_size, len(rel_ids))
+
+    def prepare(self, triples, hidden_state, entities):
+        ent_groups = []
+        for i, entity in enumerate(entities):
+            for ent_pair in itertools.permutations(entity, 2):
+                sub_pos, end_pos = ent_pair
+                ent_groups.append([i, sub_pos[0], sub_pos[1], end_pos[0], end_pos[1]])
+
+        rel_hidden_states = []
+        triple_labels = torch.zeros(len(ent_groups), device=hidden_state.device, dtype=torch.long)
+
+        if len(ent_groups) != 0:
+            # 构建 hidden_state
+            for ent in ent_groups:
+                sub_hidden_state = hidden_state[ent[0], ent[1]]
+                obj_hidden_state = hidden_state[ent[0], ent[3]]
+                rel_hidden_state = obj_hidden_state - sub_hidden_state
+                rel_hidden_states.append(rel_hidden_state)
+
+            rel_hidden_states = torch.stack(rel_hidden_states, dim=0)
+
+            # 从 triples 中构建标签
+            for i, pair in enumerate(ent_groups):
+                b = pair[0]
+                for t in triples[b]:
+                    # 找不到
+                    if t[-1] == -1:
+                        break
+                    # 找到了
+                    if t[:-1].tolist() == pair[1:]:
+                        triple_labels[i] = t[-1] + 1
+                        break
+
+        return ent_groups, rel_hidden_states, triple_labels
 
     def forward(self, hidden_output, lmhead, pos=None, labels=None):
-        logits = lmhead(hidden_output)
-        logits = logits[..., self.rel_ids] # python Ellipsis operator
+
+        if len(hidden_output) == 0:
+            return [], None
+
+        if self.config.use_rel_cls == 'multi_classifier':
+            logits = self.classifier(hidden_output)
+        elif self.config.use_rel_cls == 'lmhead':
+            logits = lmhead(hidden_output)
+            logits = logits[..., self.rel_ids] # python Ellipsis operator
+        else:
+            raise NotImplementedError("unknown relation classifier: {}".format(self.config.use_rel_cls))
 
         loss = None
         if labels is not None:

@@ -1,3 +1,2 @@
 name: BERT
 model_name_or_path: bert-base-cased
-max_seq_len: 128

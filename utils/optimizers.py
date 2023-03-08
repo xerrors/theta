@@ -17,8 +17,8 @@ def get_optimizer(theta, config):
     decoder_lr = config.get("decoder_lr", config.lr)
 
     optimizer_group_parameters = []
-    optimizer_group_parameters.extend(get_params(theta, name="model", lr=model_lr))
-    optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=["model"]))
+    optimizer_group_parameters.extend(get_params(theta, name="plm_model", lr=model_lr))
+    optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=["plm_model"]))
 
     optimizer = AdamW(optimizer_group_parameters, lr=config.lr, eps=1e-8)
 
