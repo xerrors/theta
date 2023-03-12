@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 from torchcrf import CRF
+import numpy as np
 
 class MultiNonLinearClassifier(nn.Module):
     def __init__(self, hidden_size, tag_size, dropout_rate=0.1):
@@ -100,16 +101,65 @@ class SpanModel(pl.LightningModule):
 
 class REModel(pl.LightningModule):
 
-    def __init__(self, config, rel_ids, lmhead):
+    def __init__(self, config, rel_ids, ent_ids, lmhead):
         super().__init__()
         self.config = config
         self.rel_ids = rel_ids
+        self.ent_ids = ent_ids
         if config.use_rel_cls == 'multi_classifier':
             self.classifier = MultiNonLinearClassifier(config.model.hidden_size, len(rel_ids))
         elif config.use_rel_cls == 'lmhead':
             self.lmhead = lmhead
 
-    def prepare(self, triples, hidden_state, entities, ent_type_embeddings=None):
+    def prepare(self, theta, batch, hidden_state, triples, entities):
+        """Get hidden state for the 2nd stage: relation classification"""
+        input_ids, attention_mask, pos, _, _, _ = batch
+        bsz, seq_len, h = hidden_state.shape
+
+        config = self.config
+        ent_ids = self.ent_ids
+        device = self.device
+        ent_num = len(config.dataset.ents)
+
+        assert not config.use_independent_plm or config.use_two_stage # 使用独立的预训练模型，必须使用两阶段训练
+        if config.use_two_stage:
+            # 1. 在原本的句子后面拼上实体的 tag
+            rel_input_ids = input_ids.clone().detach()
+            rel_attention_mask = attention_mask.clone().detach()
+            position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, seq_len)
+            for i in range(bsz):
+                tag = []
+                pos_id = []
+                entity = entities[i]
+                for e in entity: # e: [start, end, ent_id] e.g. [[3, 4, 6], [4, 6, 2], [6, 12, 6]]
+                    tag.append(ent_ids[e[2]+1]) # B tag, +1 是因为 O 的 id 是 0
+                    tag.extend([ent_ids[e[2]+ent_num+1]] * (e[1] - e[0] - 1)) # I tag
+                    pos_id.extend(np.arange(e[0], e[1]).tolist())
+
+                assert len(tag) + pos[i,1] <= seq_len, "entity is too long."
+                assert len(tag) == len(pos_id), "tag and pos_id should have the same length."
+
+                tag_len = len(tag)
+                tokens_num = min(seq_len, rel_attention_mask[i].sum().item() + tag_len)
+                rel_input_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(tag, device=device)
+                rel_input_ids[i, tokens_num-1] = theta.tokenizer.sep_token_id
+                position_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(pos_id, device=device)
+                rel_attention_mask[i, :tokens_num] = 1
+
+            # 2. 重新计算 hidden state
+            if config.use_independent_plm:
+                outputs = theta.plm_model_for_re(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
+                ent_type_embeddings = theta.plm_model_for_re.get_output_embeddings().weight[ent_ids]
+            else:
+                outputs = theta.plm_model(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
+                ent_type_embeddings = theta.plm_model.get_output_embeddings().weight[ent_ids]
+
+            rel_last_hidden_state = outputs.hidden_states[-1]
+
+        else:
+            rel_last_hidden_state = hidden_state
+            ent_type_embeddings = theta.plm_model.get_output_embeddings().weight[ent_ids]
+
         ent_groups = []
         for i, entity in enumerate(entities):
             for ent_pair in itertools.permutations(entity, 2):
@@ -117,15 +167,15 @@ class REModel(pl.LightningModule):
                 ent_groups.append([i, sub_pos[0], sub_pos[1], end_pos[0], end_pos[1], sub_pos[2], end_pos[2]])
 
         rel_hidden_states = []
-        triple_labels = torch.zeros(len(ent_groups), device=hidden_state.device, dtype=torch.long)
+        triple_labels = torch.zeros(len(ent_groups), device=device, dtype=torch.long)
 
         if len(ent_groups) != 0:
-            # 构建 hidden_state, ent [batch_idx, sub_start, sub_end, end_start, end_end, sub_type, end_type]
+            # 构建 rel_last_hidden_state, ent [batch_idx, sub_start, sub_end, end_start, end_end, sub_type, end_type]
             for ent in ent_groups:
-                sub_hidden_state = hidden_state[ent[0], ent[1]]
-                obj_hidden_state = hidden_state[ent[0], ent[3]]
+                sub_hidden_state = rel_last_hidden_state[ent[0], ent[1]]
+                obj_hidden_state = rel_last_hidden_state[ent[0], ent[3]]
 
-                if self.config.use_ner and self.config.use_ent_type_in_rel:
+                if config.use_ner and config.use_ent_type_in_rel:
                     sub_hidden_state = sub_hidden_state + ent_type_embeddings[ent[5]+1] # B-Tag
                     obj_hidden_state = obj_hidden_state + ent_type_embeddings[ent[6]+1] # B-Tag
 

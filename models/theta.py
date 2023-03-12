@@ -143,12 +143,9 @@ class Theta(pl.LightningModule):
         # if config.use_span:
         #     self.span_model = SpanModel(config, 3)
 
-
         if config.use_rel_cls:
-            if config.use_independent_plm:
-                self.rel_model = REModel(self.config, self.rel_ids, self.lmhead_for_re)
-            else:
-                self.rel_model = REModel(self.config, self.rel_ids, self.lmhead)
+            lmhead = self.lmhead if not config.use_independent_plm else self.lmhead_for_re
+            self.rel_model = REModel(self.config, self.rel_ids, self.ent_ids, lmhead)
 
         if config.use_ner:
             self.ner_model = NERModel(config, self.ent_ids, self.lmhead)
@@ -194,62 +191,28 @@ class Theta(pl.LightningModule):
             ner_logits, ner_loss = self.ner_model(hidden_state, pos=pos, labels=ent_maps)
             output["ner_logits"] = ner_logits
 
-        if mode == "train":
-            entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
-        else:
-            entities = self.ner_model.decode_entities(ner_logits, pos=pos)
-
-        # 1. 在原本的句子后面拼上实体的 tag
-        assert not self.config.use_independent_plm or self.config.use_two_stage # 使用独立的预训练模型，必须使用两阶段训练
-        if self.config.use_two_stage:
-            rel_input_ids = input_ids.clone().detach()
-            rel_attention_mask = attention_mask.clone().detach()
-            position_ids = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(bsz, seq_len)
-            for i in range(bsz):
-                tag = []
-                pos_id = []
-                entity = entities[i]
-                for e in entity: # e: [start, end, ent_id] e.g. [[3, 4, 6], [4, 6, 2], [6, 12, 6]]
-                    tag.append(self.ent_ids[e[2]+1]) # B tag, +1 是因为 O 的 id 是 0
-                    tag.extend([self.ent_ids[e[2]+self.ent_num+1]] * (e[1] - e[0] - 1)) # I tag
-                    pos_id.extend(np.arange(e[0], e[1]).tolist())
-
-                assert len(tag) + pos[i,1] <= seq_len, "entity is too long."
-                assert len(tag) == len(pos_id), "tag and pos_id should have the same length."
-
-                tag_len = len(tag)
-                tokens_num = min(seq_len, rel_attention_mask[i].sum().item() + tag_len)
-                rel_input_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(tag, device=self.device)
-                rel_input_ids[i, tokens_num-1] = self.tokenizer.sep_token_id
-                position_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(pos_id, device=self.device)
-                rel_attention_mask[i, :tokens_num] = 1
-
-            # 2. 重新计算 hidden state
-            if self.config.use_independent_plm:
-                outputs = self.plm_model_for_re(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
-                ent_type_embeddings = self.plm_model_for_re.get_output_embeddings().weight[self.ent_ids]
-            else:
-                outputs = self.plm_model(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
-                ent_type_embeddings = self.plm_model.get_output_embeddings().weight[self.ent_ids]
-
-            rel_last_hidden_state = outputs.hidden_states[-1]
-
-        else:
-            rel_last_hidden_state = hidden_state
-            ent_type_embeddings = self.plm_model.get_output_embeddings().weight[self.ent_ids]
-
-
         if self.config.use_rel_cls:
             assert self.config.use_span or self.config.use_ner, "need to use NER model to get entity position."
 
-            ent_groups, rel_hidden_states, triple_labels = self.rel_model.prepare(triples, rel_last_hidden_state, entities, ent_type_embeddings)
+            # 如果是训练阶段，使用 gold triples 计算损失，如果不是，仅保存预测的 triples 用于评估
+            entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
+            rel_output = self.rel_model.prepare(self, batch, hidden_state, triples, entities)
+            ent_groups, rel_hidden_states, triple_labels = rel_output
 
             rel_logits, rel_loss = self.rel_model(rel_hidden_states, labels=triple_labels)
             triples_pred = [ent_groups[i] + [rel_logits[i].argmax().item()] for i in range(len(ent_groups))]
+            output["triples_pred_with_gold"] = triples_pred
 
-            output["triples_pred"] = triples_pred
-            triples_gold_count = sum([len([t for t in t_ if t[-1] != -1]) for t_ in triples])
-            self.log("pred_triples_rate", (len(triples_pred)+1) / (triples_gold_count+1))
+            if mode != "train":
+                # 如果是测试阶段，使用预测的 triples
+                entities = self.ner_model.decode_entities(ner_logits, pos=pos) # gold entities
+                rel_output = self.rel_model.prepare(self, batch, hidden_state, triples, entities)
+                ent_groups, rel_hidden_states, triple_labels = rel_output
+
+                rel_logits, rel_loss = self.rel_model(rel_hidden_states, labels=triple_labels)
+                triples_pred = [ent_groups[i] + [rel_logits[i].argmax().item()] for i in range(len(ent_groups))]
+
+                output["triples_pred"] = triples_pred
 
         # 计算损失
         if mode != "test":
@@ -308,11 +271,13 @@ class Theta(pl.LightningModule):
     def validation_epoch_end(self, outputs):
         f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
         ner_f1, ner_p, ner_r = f1_score(outputs, 'pred_entities', 'gold_entities')
+        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples')
 
         self.best_f1 = max(f1, self.best_f1)
         self.log_dict_values({'val_p': p, 'val_r': r})
         self.log_dict_values({'val_f1': f1, 'best_f1': self.best_f1}, on_epoch=True, prog_bar=True)
         self.log_dict_values({'val_ner_f1': ner_f1, 'val_ner_p': ner_p, 'val_ner_r': ner_r})
+        self.log_dict_values({'val_rel_f1': rel_f1, 'val_rel_p': rel_p, 'val_rel_r': rel_r})
 
     def test_step(self, batch, batch_idx):
         input_ids, _, pos, triples, ent_maps, _  = batch
@@ -323,10 +288,12 @@ class Theta(pl.LightningModule):
     def test_epoch_end(self, outputs):
         f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
         ner_f1, ner_p, ner_r = f1_score(outputs, 'pred_entities', 'gold_entities')
+        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples')
 
         self.test_f1 = f1
         self.log_dict_values({'test_f1': f1, 'test_p': p, 'test_r': r})
         self.log_dict_values({'test_ner_f1': ner_f1, 'test_ner_p': ner_p, 'test_ner_r': ner_r})
+        self.log_dict_values({'test_rel_f1': rel_f1, 'test_rel_p': rel_p, 'test_rel_r': rel_r})
 
     def eval_step_output(self, input_ids, pos, triples, ent_maps, output):
         if self.config.use_ner:
@@ -335,13 +302,15 @@ class Theta(pl.LightningModule):
             pred_entities = self.get_span_set(input_ids, pred_entities)
             gold_entities = self.get_span_set(input_ids, gold_entities)
 
-        pred_triples, gold_triples = self.get_triple_set(input_ids, triples, output)
+        pred_triples, gold_triples = self.get_triple_set(input_ids, triples, output, "triples_pred")
+        pred_triples_with_gold = self.get_triple_set(input_ids, triples, output, "triples_pred_with_gold", pred_only=True)
 
         return {
             'pred_entities': pred_entities,
             'gold_entities': gold_entities,
             'pred_triples': pred_triples,
             'gold_triples': gold_triples,
+            'pred_triples_with_gold': pred_triples_with_gold,
         }
 
 
@@ -349,12 +318,12 @@ class Theta(pl.LightningModule):
     def configure_optimizers(self):
         return get_optimizer(self, self.config)
 
-    def get_triple_set(self, input_ids, triples, output):
+    def get_triple_set(self, input_ids, triples, output, name, pred_only=False):
         pred_triples = set()
         # start, end 是左闭右开区间
         # [batch_idx, sub_start, sub_end, obj_start, obj_end, sub_type, obj_type, rel_idx]
         #  0          1          2        3          4        5         6         7 (include NA)
-        for t in output["triples_pred"]:
+        for t in output[name]:
             if t[7] != 0:
                 sub_token = self.tokenizer.decode(input_ids[t[0], t[1]:t[2]])
                 obj_token = self.tokenizer.decode(input_ids[t[0], t[3]:t[4]])
@@ -366,6 +335,9 @@ class Theta(pl.LightningModule):
                     pred_triples.add(triple)
                 else:
                     pred_triples.add(triple[:3])
+
+        if pred_only:
+            return pred_triples
 
         gold_triples = set()
         # [sub_start, sub_end, obj_start, obj_end, rel_idx, sub_type, obj_type]
