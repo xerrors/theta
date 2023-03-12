@@ -2,6 +2,7 @@ import itertools
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
+from torchcrf import CRF
 
 class MultiNonLinearClassifier(nn.Module):
     def __init__(self, hidden_size, tag_size, dropout_rate=0.1):
@@ -47,15 +48,6 @@ class SpanModel(pl.LightningModule):
             self.classifier = MultiNonLinearClassifier(config.model.hidden_size, self.num_labels)
         else:
             raise NotImplementedError(f"config.use_span={config.use_span} is not implemented!")
-
-        # self.classifier = nn.Sequential(
-        #     FeedForward(input_dim=config.hidden_size,
-        #                 num_layers=2,
-        #                 hidden_dims=150,
-        #                 activations='relu',
-        #                 dropout=config.hidden_dropout_prob),
-        #     nn.Linear(150, num_labels)
-        # )
 
     def forward(self, hidden_output, pos=None, labels=None):
 
@@ -108,29 +100,35 @@ class SpanModel(pl.LightningModule):
 
 class REModel(pl.LightningModule):
 
-    def __init__(self, config, rel_ids):
+    def __init__(self, config, rel_ids, lmhead):
         super().__init__()
         self.config = config
         self.rel_ids = rel_ids
-        # self.lmhead = lmhead
         if config.use_rel_cls == 'multi_classifier':
             self.classifier = MultiNonLinearClassifier(config.model.hidden_size, len(rel_ids))
+        elif config.use_rel_cls == 'lmhead':
+            self.lmhead = lmhead
 
-    def prepare(self, triples, hidden_state, entities):
+    def prepare(self, triples, hidden_state, entities, ent_type_embeddings=None):
         ent_groups = []
         for i, entity in enumerate(entities):
             for ent_pair in itertools.permutations(entity, 2):
                 sub_pos, end_pos = ent_pair
-                ent_groups.append([i, sub_pos[0], sub_pos[1], end_pos[0], end_pos[1]])
+                ent_groups.append([i, sub_pos[0], sub_pos[1], end_pos[0], end_pos[1], sub_pos[2], end_pos[2]])
 
         rel_hidden_states = []
         triple_labels = torch.zeros(len(ent_groups), device=hidden_state.device, dtype=torch.long)
 
         if len(ent_groups) != 0:
-            # 构建 hidden_state
+            # 构建 hidden_state, ent [batch_idx, sub_start, sub_end, end_start, end_end, sub_type, end_type]
             for ent in ent_groups:
                 sub_hidden_state = hidden_state[ent[0], ent[1]]
                 obj_hidden_state = hidden_state[ent[0], ent[3]]
+
+                if self.config.use_ner and self.config.use_ent_type_in_rel:
+                    sub_hidden_state = sub_hidden_state + ent_type_embeddings[ent[5]+1] # B-Tag
+                    obj_hidden_state = obj_hidden_state + ent_type_embeddings[ent[6]+1] # B-Tag
+
                 rel_hidden_state = obj_hidden_state - sub_hidden_state
                 rel_hidden_states.append(rel_hidden_state)
 
@@ -139,18 +137,19 @@ class REModel(pl.LightningModule):
             # 从 triples 中构建标签
             for i, pair in enumerate(ent_groups):
                 b = pair[0]
+                # t: [sub_start, sub_end, obj_start, obj_end, rel, sub_type, obj_type]
                 for t in triples[b]:
                     # 找不到
                     if t[-1] == -1:
                         break
                     # 找到了
-                    if t[:-1].tolist() == pair[1:]:
-                        triple_labels[i] = t[-1] + 1
+                    if t[:4].tolist() == pair[1:5]:
+                        triple_labels[i] = t[4] + 1
                         break
 
         return ent_groups, rel_hidden_states, triple_labels
 
-    def forward(self, hidden_output, lmhead, pos=None, labels=None):
+    def forward(self, hidden_output, pos=None, labels=None):
 
         if len(hidden_output) == 0:
             return [], None
@@ -158,7 +157,7 @@ class REModel(pl.LightningModule):
         if self.config.use_rel_cls == 'multi_classifier':
             logits = self.classifier(hidden_output)
         elif self.config.use_rel_cls == 'lmhead':
-            logits = lmhead(hidden_output)
+            logits = self.lmhead(hidden_output)
             logits = logits[..., self.rel_ids] # python Ellipsis operator
         else:
             raise NotImplementedError("unknown relation classifier: {}".format(self.config.use_rel_cls))
@@ -169,88 +168,105 @@ class REModel(pl.LightningModule):
             # Only keep active parts of the loss
             if pos is not None:
                 bsz, seq_len, _ = hidden_output.shape
-                logits = torch.cat([logits[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
-                labels = torch.cat([labels[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
+                new_logits = torch.cat([logits[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
+                new_labels = torch.cat([labels[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
 
-            logits = logits.view(-1, len(self.rel_ids))
-            labels = labels.view(-1)
+                new_logits = new_logits.view(-1, len(self.rel_ids))
+                new_labels = labels.view(-1)
+            else:
+                new_logits = logits.view(-1, len(self.rel_ids))
+                new_labels = labels.view(-1)
 
-            loss = loss_fct(logits, labels)
+            loss = loss_fct(new_logits, new_labels)
 
         return logits, loss
 
 
-class EntityClassifier(pl.LightningModule):
+class NERModel(pl.LightningModule):
 
-    def __init__(self, config, ent_ids):
+    def __init__(self, config, ent_ids, lmhead):
         super().__init__()
         self.config = config
         self.ent_ids = ent_ids
 
-        max_span_length = config.get("max_span_length", 10)
-        width_embedding_dim = config.get("width_embedding_dim", 150)
-        head_hidden_dim = config.get("head_hidden_dim", 150)
+        if config.use_ner == "lmhead":
+            self.lmhead = lmhead
+        else:
+            self.classifier = MultiNonLinearClassifier(config.model.hidden_size, len(ent_ids))
 
-        self.classifier = nn.Sequential(
-            FeedForward(input_dim=config.hidden_size * 2 + width_embedding_dim,
-                        num_layers=2,
-                        hidden_dims=head_hidden_dim,
-                        activations='relu',
-                        dropout=config.hidden_dropout_prob),
-            nn.Linear(head_hidden_dim, len(ent_ids))
-        )
+        if self.config.use_crf:
+            self.crf = CRF(len(ent_ids), batch_first=True)
 
-        # 暂时还不使用
-        self.width_embedding = nn.Embedding(max_span_length+1, width_embedding_dim)
+        self.num_ent_type = len(ent_ids) // 2
 
     def forward(self, hidden_output, pos=None, labels=None):
-        """
-        :param hidden_output: [bsz, seq_len, hidden_size * 2 + width_embedding_dim]
-        :param pos: [bsz, 2]
-        :param labels: [bsz, seq_len]
-        :return:
-        """
-        logits = self.classifier(hidden_output)
+
+        if self.config.use_ner == "lmhead":
+            logits = self.lmhead(hidden_output)
+            logits = logits[..., self.ent_ids]
+        else:
+            logits = self.classifier(hidden_output)
 
         loss = None
+        bsz = logits.shape[0]
         if labels is not None:
-            loss_fct = nn.CrossEntropyLoss(reduction='mean')
-            # Only keep active parts of the loss
-            if pos is not None:
-                bsz, seq_len, _ = hidden_output.shape
-                logits = torch.cat([logits[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
-                labels = torch.cat([labels[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
 
-            logits = logits.view(-1, len(self.ent_ids))
-            labels = labels.view(-1)
+            if self.config.use_crf:
+                mask = torch.zeros_like(labels, dtype=torch.bool)
+                for b in range(labels.shape[0]):
+                    mask[b, pos[b,0]:pos[b,1]] = 1
+                loss = -self.crf(logits, labels, mask=mask, reduction='mean')
 
-            loss = loss_fct(logits, labels)
+            else:
+                loss_fct = nn.CrossEntropyLoss(reduction='mean')
+                # Only keep active parts of the loss
+                if pos is not None:
+                    labels = torch.cat([labels[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
+                    labels = labels.view(-1)
+                    new_logits = torch.cat([logits[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
+                    new_logits = new_logits.view(-1, len(self.ent_ids))
+                else:
+                    new_logits = logits.view(-1, len(self.ent_ids))
+                    labels = labels.view(-1)
+
+                loss = loss_fct(new_logits, labels)
 
         return logits, loss
 
+    def decode_entities(self, logits, pos=None):
+        """return 左闭右开 [[(start, end, type), (...)],[],[(...)]]"""
+        if logits.shape[-1] == len(self.ent_ids):
+            if self.config.use_crf:
+                logits = torch.tensor(self.crf.decode(logits), device=logits.device)
+            else:
+                logits = torch.argmax(logits, dim=-1)
 
-class EntityClassifierWithLMHead(pl.LightningModule):
+        entities = []
+        bsz = logits.shape[0]
+        # O B*7(1~8) I*7(8-15), self.num_ent_type = 7
+        for b in range(bsz):
+            entity = []
+            start = False
+            sent_start, sent_end = pos[b,0], pos[b,1]
+            for i in range(sent_start, sent_end):
+                # 判断是否是 B 标签
+                if logits[b, i] > 0 and logits[b, i] <= self.num_ent_type:
+                    start = True
+                    entity.append([i, i+1, logits[b, i].item()-1])
+                # 判断是否是 I 标签以及是否是连续的
+                elif logits[b, i] > self.num_ent_type and start:
+                    # # 放松一点，只要是连续的就合并
+                    # if entity[-1][2] == logits[b, i] - 1 - self.num_ent_type:
+                    #     entity[-1][1] = i + 1
+                    # else:
+                    #     start = False
+                    entity[-1][1] = i + 1 # 左闭右开
+                else:
+                    start = False
 
-    def __init__(self, config, ent_ids):
-        super().__init__()
-        self.config = config
-        self.ent_ids = ent_ids
+            entities.append(entity)
 
-    def forward(self, hidden_output, lmhead, labels=None):
-        logits = lmhead(hidden_output)
-        logits = logits[..., self.ent_ids]
-
-        loss = None
-        if labels is not None:
-            loss_fct = nn.CrossEntropyLoss(reduction='mean')
-            logits = logits.view(-1, len(self.ent_ids))
-            labels = labels.view(-1)
-
-            loss = loss_fct(logits, labels)
-
-        return logits, loss
-
-
+        return entities
 
 class FeedForward(nn.Module):
     def __init__(self, input_dim, num_layers, hidden_dims, activations, dropout):
@@ -301,23 +317,3 @@ class FeedForward(nn.Module):
             x = dropout(activation(layer(x)))
 
         return x
-
-class CRFSpanModel(pl.LightningModule):
-
-    def __init__(self, config, ent_ids):
-        super().__init__()
-        self.config = config
-        self.ent_ids = ent_ids
-        self.crf = CRF(len(ent_ids), batch_first=True)
-
-    def forward(self, hidden_output, pos=None, labels=None):
-        logits = self.crf.decode(hidden_output)
-
-        loss = None
-        if labels is not None:
-            loss = self.crf(hidden_output, labels, mask=pos)
-
-        return logits, loss
-
-# 实现一个 crf
-# class CRF(nn.Module):

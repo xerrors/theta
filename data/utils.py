@@ -110,8 +110,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             # 补全到 max_seq_len
             if len(tokenized_tokens) < max_seq_len - 2:
 
-                attention_mask = torch.ones(max_seq_len, dtype=torch.long)
-                attention_mask[len(tokenized_tokens)+2:] = 1.0
+                attention_mask = torch.zeros(max_seq_len, dtype=torch.long)
+                attention_mask[:len(tokenized_tokens)+2] = 1.0
 
                 tokenized_tokens = [tokenizer.cls_token] + tokenized_tokens + [tokenizer.sep_token]
                 tokenized_tokens += [tokenizer.pad_token] * (max_seq_len - len(tokenized_tokens))
@@ -125,6 +125,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
 
             input_ids = tokenizer.convert_tokens_to_ids(tokenized_tokens)
             input_ids = torch.tensor(input_ids, dtype=torch.long)
+            assert sum(input_ids != tokenizer.pad_token_id) == sum(attention_mask != 0)
 
             # 原本的 token 在现有的 tokens 序列中的起始位置
             sent_start += 1
@@ -135,35 +136,35 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             end2idx = [i + sent_start for i in end2idx] # 因为有 cls token
 
             """关于命名实体识别的说明
-
-            TODO：暂时还不清楚是直接预测实体的边界和类型呢，还是先预测实体的边界在根据特征预测类型呢？
-
             Rules:
                 - 使用 BIO 的标注方式
                 - 如果填充的是 0 则表示不是实体
 
             Shape: [max_seq_len]
-
             """
+            ent_type = {}
             ner_total_len = 0  # 记录 ner 的总长度，用于判断是否有重叠
             added = []  # 记录已经添加过的 ner，因为在文档 323 中存在同一个实体标注了两次，两次是不同的类型，这里以第二个类型为准
-            span_maps = torch.zeros(len(tokenized_tokens), dtype=torch.long) # 0 表示不是实体
+            ent_maps = torch.zeros(len(tokenized_tokens), dtype=torch.long) # 0 表示不是实体
             for ner in sent.ner:
                 ent_s = start2idx[ner.span.start_sent]
                 ent_e = end2idx[ner.span.end_sent]
-                # 实体边界识别
-                span_maps[ent_s] = 1 # B
-                span_maps[ent_s+1:ent_e] = 2 # I
-
-                # 实体边界以及类型识别
-                # span_maps[ent_s] = ner2id[ner.label] * 2 + 1 # B
-                # span_maps[ent_s+1:ent_e] = ner2id[ner.label] * 2 + 2 # I
+                # 实体边界识别 O B-0 B-1 B-2 B-3 B-4 B-5 B-6 I-0 I-1 I-2 I-3 I-4 I-5 I-6
+                #            0 1   2   3   4   5   6   7   8   9   10  11  12  13  14
+                if config.use_span:
+                    ent_maps[ent_s] = 1 # B
+                    ent_maps[ent_s+1:ent_e] = 2 # I
+                elif config.use_ner:
+                    ent_maps[ent_s] = ner2id[ner.label] + 1
+                    ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
 
                 if ner.span not in added:
                     ner_total_len += ent_e - ent_s
                     added.append(ner.span)
 
-            assert ner_total_len == (span_maps != 0).sum(), 'NER overlap'
+                ent_type[(ent_s, ent_e)] = ner2id[ner.label]
+
+            assert ner_total_len == (ent_maps != 0).sum(), 'NER overlap'
 
             ent_corres = torch.zeros((max_seq_len, max_seq_len), dtype=torch.long)
             triples = set()
@@ -174,20 +175,22 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 sub_e = end2idx[rel.pair[0].end_sent] # 开区间
                 obj_s = start2idx[rel.pair[1].start_sent]
                 obj_e = end2idx[rel.pair[1].end_sent] # 开区间
-                triples.add((sub_s, sub_e, obj_s, obj_e, rel2id[rel.label]))
+                sub_type = ent_type[(sub_s, sub_e)]
+                obj_type = ent_type[(obj_s, obj_e)]
+                triples.add((sub_s, sub_e, obj_s, obj_e, rel2id[rel.label], sub_type, obj_type))
 
                 ent_corres[sub_s:sub_e, obj_s:obj_e] = 1
 
             max_tripes_count = config.get("max_tripes_count", 30)
             assert len(triples) <= max_tripes_count, f"triples count {len(triples)} > {max_tripes_count}"
             # 补全到最大的三元组数量
-            triples = list(triples) + [(-1, -1, -1, -1, -1)] * (max_tripes_count - len(triples))
+            triples = list(triples) + [(-1, -1, -1, -1, -1, -1, -1)] * (max_tripes_count - len(triples))
 
             sample['input_ids'] = input_ids
             sample['triples'] = torch.tensor(triples, dtype=torch.long)
             sample['attention_mask'] = attention_mask
             sample['pos'] = torch.tensor((sent_start, sent_end, sent.sentence_ix, sent.sentence_start), dtype=torch.long)
-            sample['span_maps'] = span_maps
+            sample['ent_maps'] = ent_maps
             sample['ent_corres'] = ent_corres
             samples.append(sample)
 
@@ -201,10 +204,10 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     triples = torch.stack([sample["triples"] for sample in samples])
     pos = torch.stack([sample["pos"] for sample in samples])
 
-    if config.use_span:
-        span_maps = torch.stack([sample["span_maps"] for sample in samples])
+    if config.use_span or config.use_ner:
+        ent_maps = torch.stack([sample["ent_maps"] for sample in samples])
     else:
-        span_maps = torch.zeros((len(samples)), dtype=torch.long)
+        ent_maps = torch.zeros((len(samples)), dtype=torch.long)
 
     if config.use_ent_corres:
         ent_corres = torch.stack([sample["ent_corres"] for sample in samples])
@@ -217,23 +220,60 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
         "attention_mask": attention_mask,
         "pos": pos,
         "triples": triples,
-        "span_maps": span_maps,
+        "ent_maps": ent_maps,
         "ent_corres": ent_corres,
     }
 
-# def extend_maps_to_one_hot(span_maps, rel_maps, config):
+
+def get_language_map_dict():
+    ace_rel_map = {
+        'NA': 'no relation in this sentence',
+        'ART': 'artifact person',
+        'ORG-AFF': 'organization affiliation',
+        'GEN-AFF': 'general affiliation',
+        'PHYS': 'physical location',
+        'PER-SOC': 'personal social',
+        'PART-WHOLE': 'part whole'
+    }
+
+    # ['NA', 'FAC', 'WEA', 'LOC', 'VEH', 'GPE', 'ORG', 'PER']
+    ace_ent_map = {
+        'NA': 'none',
+        'FAC': 'entity facility',
+        'WEA': 'entity weapon',
+        'LOC': 'entity location',
+        'VEH': 'entity vehicle',
+        'GPE': 'entity geopolitical',
+        'ORG': 'entity organization',
+        'PER': 'entity person'
+    }
+
+    tag_map = {
+        '[SS]': 'subject start',
+        '[SE]': 'subject end',
+        '[OS]': 'object start',
+        '[OE]': 'object end',
+        '[ES]': 'entity start',
+        '[EE]': 'entity end'
+    }
+
+    return ace_rel_map,ace_ent_map,tag_map
+
+
+
+# def extend_maps_to_one_hot(ent_maps, rel_maps, config):
 #     """为了方便跟模型计算的结果比较，转为为 one-hot 的形式"""
 #     # trans ner maps from b * max_seq_len to b * max_seq_len * len(config.dataset.ents)
-#     span_maps += 1  # 防止 np.log2(0) 报错
-#     bsz, seq_len = span_maps.size()
+#     ent_maps += 1  # 防止 np.log2(0) 报错
+#     bsz, seq_len = ent_maps.size()
 
 #     new_span_maps = []
 #     for b in range(bsz):
 #         span_maps_b = np.zeros([seq_len, len(config.dataset.ents)], dtype=int)
 #         for i in range(len(config.dataset.ents)):
-#             span_maps_b[:,i] = np.int_((np.log2(span_maps[b].cpu())-1)==i)
+#             span_maps_b[:,i] = np.int_((np.log2(ent_maps[b].cpu())-1)==i)
 #         new_span_maps.append(span_maps_b)
-#     span_maps = torch.tensor(new_span_maps)
+#     ent_maps = torch.tensor(new_span_maps)
 
 #     # trans rel maps from b * max_seq_len * max_seq_len to b * max_seq_len * max_seq_len * len(config.dataset.rels)
 #     rel_maps += 1  # 防止 np.log2(0) 报错
@@ -247,7 +287,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
 #         new_rel_maps.append(rel_maps_b)
 #     rel_maps = torch.tensor(new_rel_maps)
 
-#     return span_maps, rel_maps
+#     return ent_maps, rel_maps
 
 
 # class NpEncoder(json.JSONEncoder):

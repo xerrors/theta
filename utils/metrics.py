@@ -1,12 +1,12 @@
-def f1_score(outputs):
+def f1_score(outputs, pred_name, gold_name):
     """计算 F1 分数"""
     pred = 0
     gold = 0
     correct = 0
 
     for val_out in outputs:
-        pred_triples = set(val_out['pred_triples'])
-        gold_triples = set(val_out['gold_triples'])
+        pred_triples = set(val_out[pred_name])
+        gold_triples = set(val_out[gold_name])
         pred += len(pred_triples)
         gold += len(gold_triples)
         correct += len(set(pred_triples) & set(gold_triples))

@@ -1,38 +1,37 @@
-from pprint import pprint
-
+import os
+import argparse
 from main import main
 import time
 import utils
 
 # 根据 run_config 生成所有的组合
-index = "global_batch_size"
-job_id = time.strftime("%Y%m%d-%H%M%S")
+run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
+
+
+index = ["seed", "lr"]
 run_config = {
-    "tag": "model-bsz",
-    "gpu": "1",
-    "global_batch_size": [32, 64, 128]
+    "tag": "lambda",
+    "lr": [1e-4, 3e-5, 8e-6, 3e-6],
+    "seed": [42, 43],
 }
 
-run_configs = [
-    {
-        "tag": "win-250",
-        "gpu": "1",
-        "max_seq_len": 250,
-        "context_window": 250
-    },
-    {
-        "tag": "win-350",
-        "gpu": "1",
-        "max_seq_len": 350,
-        "context_window": 350
-    },
-    {
-        "tag": "win-450",
-        "gpu": "1",
-        "max_seq_len": 450,
-        "context_window": 450
-    }
-]
+run_configs = []
+
+
+def get_gpu_by_user_input():
+
+    try:
+        os.system("gpustat")
+    except:
+        print("WARNING: Try to install gpustat to check GPU status: pip install gpustat")
+
+    gpu = input("\nSelect GPU >>> ")
+
+    assert gpu and int(gpu) in [0, 1, 2, 3], \
+        "Can not run scripts on GPU: {}. Stoped!".format(gpu if gpu else "None")
+    print("This scripts will use GPU {}".format(gpu))
+    return gpu
+
 
 def get_all_combinations(run_config):
 
@@ -54,6 +53,12 @@ def get_all_combinations(run_config):
     return combinations
 
 def exec_main(config):
+
+    config["run_id"] = run_id
+    config["fast_dev_run"] = args.fast_dev_run
+    if not config.get("gpt") or config.get("gpt") not in ["0", "1", "2", "3"]:
+        config["gpu"] = GPU
+
     try:
         return main(True, **config)
 
@@ -65,16 +70,24 @@ def exec_main(config):
         print(utils.red("[XJOBS]"), "Running Error: {}, Continue...".format(e))
         return None
 
+GPU = get_gpu_by_user_input()
 
-if __name__ == "__main__":
+parser = argparse.ArgumentParser(add_help=False)
+# 添加一个 --fast-dev-run 的 argsparser 配置
+parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
+args, _ = parser.parse_known_args()
 
-    # 生成所有的组合
-    combinations = get_all_combinations(run_config)
+# 生成所有的组合
+combinations = get_all_combinations(run_config)
 
-    for i, config in enumerate(combinations):
-        config["tag"] = f"{config['tag']}-{config.get(index, i)}"
-        print(exec_main(config))
+for i, config in enumerate(combinations):
+    config["tag"] = f"{config['tag']}"
+    for key in index:
+        if config.get(key):
+            config["tag"] += f"-{key}_{config[key]}"
 
-    for config in run_configs:
-        print(exec_main(config))
+    print(exec_main(config))
+
+for config in run_configs:
+    print(exec_main(config))
 

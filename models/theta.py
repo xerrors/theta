@@ -2,11 +2,11 @@ import math
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import itertools
-
-from models.components import MultiNonLinearClassifier, SpanModel, REModel, EntityClassifier, EntityClassifierWithLMHead
+import numpy as np
+from models.components import MultiNonLinearClassifier, SpanModel, REModel, NERModel
+from data.utils import get_language_map_dict
 from utils.metrics import f1_score
-from utils.optimizers import get_optimizer, calc_num_training_steps
+from utils.optimizers import get_optimizer
 
 
 def getBertForMaskedLMClass(model_config):
@@ -40,6 +40,11 @@ class Theta(pl.LightningModule):
 
         ModelClass = getBertForMaskedLMClass(config.model)
         self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path)
+
+        if config.use_independent_plm:
+            self.plm_model_for_re = ModelClass.from_pretrained(config.model.model_name_or_path)
+            self.lmhead_for_re = getPretrainedLMHead(self.plm_model_for_re, config.model)
+
         self.lmhead = getPretrainedLMHead(self.plm_model, config.model) # 预训练语言模型的头部，并不占用额外参数
 
         # 常用参数
@@ -66,37 +71,61 @@ class Theta(pl.LightningModule):
         config = self.config
 
         if self.na_idx is None:
-            rels = config.dataset.rels + ['NA']
+            rels = ['NA'] + config.dataset.rels
         else:
             rels = config.dataset.rels
 
-        self.rel_tokens = [f"[R{i}]" for i in range(len(rels))]
-        # ent_type_ids = [f"[E{i}]" for i in range(self.ent_num + 1)]
-        # ent_base_ids = ["[SS]", "[SE]", "[OS]", "[OE]", "[ES]", "[EE]"]
+        ents = config.dataset.ents
+
+        rel_tokens = [f"[R{i}]" for i in range(len(rels))]
+        ent_tokens = ["[O]"] + [f"[B-{e}]" for e in ents] + [f"[I-{e}]" for e in ents]
+        tag_tokens = ["[SS]", "[SE]", "[OS]", "[OE]", "[ES]", "[EE]"]
 
         # 扩展词表
-        special_tokens_dict = {'additional_special_tokens': self.rel_tokens}
+        special_tokens_dict = {'additional_special_tokens': rel_tokens + ent_tokens + tag_tokens}
         self.tokenizer.add_special_tokens(special_tokens_dict)
         self.plm_model.resize_token_embeddings(len(self.tokenizer))
+        if config.use_independent_plm:
+            self.plm_model_for_re.resize_token_embeddings(len(self.tokenizer))
 
-        self.rel_ids = self.tokenizer.convert_tokens_to_ids(self.rel_tokens)
+        self.rel_ids = self.tokenizer.convert_tokens_to_ids(rel_tokens)
+        self.ent_ids = self.tokenizer.convert_tokens_to_ids(ent_tokens)
+        self.tag_ids = self.tokenizer.convert_tokens_to_ids(tag_tokens)
 
         # 初始化关系的词向量
         word_embeddings = self.plm_model.get_input_embeddings().weight.data
-        ace_rel_map = {
-            'NA': 'no relation',
-            'ART': 'artifact person',
-            'ORG-AFF': 'organization affiliation',
-            'GEN-AFF': 'general affiliation',
-            'PHYS': 'physical location',
-            'PER-SOC': 'personal social',
-            'PART-WHOLE': 'part whole'
-        }
+        if self.config.use_independent_plm:
+            word_embeddings_re = self.plm_model_for_re.get_input_embeddings().weight.data
 
-        ace_ids = [self.tokenizer.encode(ace_rel_map[rel], add_special_tokens=False) for rel in rels]
+        ace_rel_map, ace_ent_map, tag_map = get_language_map_dict()
 
+        # 下面的代码是有点丑陋，甚至于恶心的，但是也没有办法，先这么写着吧
+        ace_rel_ids = [self.tokenizer.encode(ace_rel_map[rel], add_special_tokens=False) for rel in rels]
         for i, rel_id in enumerate(self.rel_ids):
-            word_embeddings[rel_id] = word_embeddings[ace_ids[i]].clone().mean(dim=-2)
+            word_embeddings[rel_id] = word_embeddings[ace_rel_ids[i]].clone().mean(dim=-2)
+            if self.config.use_independent_plm:
+                word_embeddings_re[rel_id] = word_embeddings_re[ace_rel_ids[i]].clone().mean(dim=-2)
+
+        ace_ent_ids = [self.tokenizer.encode("outside", add_special_tokens=False)]
+        for ent in ents:
+            ace_ent_ids.append(self.tokenizer.encode("begin " + ace_ent_map[ent], add_special_tokens=False))
+        for ent in ents:
+            ace_ent_ids.append(self.tokenizer.encode("inside " + ace_ent_map[ent], add_special_tokens=False))
+
+        for i, ent_id in enumerate(self.ent_ids):
+            word_embeddings[ent_id] = word_embeddings[ace_ent_ids[i]].clone().mean(dim=-2)
+            if self.config.use_independent_plm:
+                word_embeddings_re[ent_id] = word_embeddings_re[ace_ent_ids[i]].clone().mean(dim=-2)
+
+        ace_tag_ids = [self.tokenizer.encode(tag_map[tag], add_special_tokens=False) for tag in tag_tokens]
+        for i, tag_id in enumerate(self.tag_ids):
+            word_embeddings[tag_id] = word_embeddings[ace_tag_ids[i]].clone().mean(dim=-2)
+            if self.config.use_independent_plm:
+                word_embeddings_re[tag_id] = word_embeddings_re[ace_tag_ids[i]].clone().mean(dim=-2)
+
+        assert (self.plm_model.get_input_embeddings().weight == word_embeddings).all()
+        assert not self.config.use_independent_plm or (
+            self.config.use_independent_plm and (self.plm_model_for_re.get_input_embeddings().weight == word_embeddings).all())
 
     def register_components(self):
         """ 用于构建除了预训练语言模型之外的所有模型组件
@@ -104,19 +133,25 @@ class Theta(pl.LightningModule):
         """
         config = self.config
 
-        if self.config.use_rel_maps:
-            self.rel_embeddings = nn.Embedding(self.rel_num, self.hidden_size)
-            self.sub_cls = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
-            self.obj_cls = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
+        # if self.config.use_rel_maps:
+        #     self.rel_embeddings = nn.Embedding(self.rel_num, self.hidden_size)
+        #     self.sub_cls = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
+        #     self.obj_cls = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
 
-        if self.config.use_ent_corres:
-            self.ent_corres = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
+        # if self.config.use_ent_corres:
+        #     self.ent_corres = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
+        # if config.use_span:
+        #     self.span_model = SpanModel(config, 3)
+
 
         if config.use_rel_cls:
-            self.rel_model = REModel(self.config, self.rel_ids)
+            if config.use_independent_plm:
+                self.rel_model = REModel(self.config, self.rel_ids, self.lmhead_for_re)
+            else:
+                self.rel_model = REModel(self.config, self.rel_ids, self.lmhead)
 
-        if config.use_span:
-            self.span_model = SpanModel(config, 3)
+        if config.use_ner:
+            self.ner_model = NERModel(config, self.ent_ids, self.lmhead)
 
     def forward(self, batch, mode="train"):
         """Model forward
@@ -126,7 +161,7 @@ class Theta(pl.LightningModule):
             return_loss (bool, optional): return loss or not. Defaults to True.
         """
 
-        input_ids, attention_mask, pos, triples, span_maps, ent_corres = batch
+        input_ids, attention_mask, pos, triples, ent_maps, _ = batch
 
         # Forward
         outputs = self.plm_model(input_ids, attention_mask=attention_mask, output_hidden_states=True)
@@ -138,87 +173,268 @@ class Theta(pl.LightningModule):
         output = {}
         output["hidden_state"] = hidden_state
 
-        # [deprecated] 计算关系表
-        if self.config.use_rel_maps:
-            rel_tmp_idx = torch.arange(0, self.rel_num, device=input_ids.device)
-            rel_tmp_idx = rel_tmp_idx.unsqueeze(0).repeat(bsz, 1) # [bsz, rel_num]
-            rel_embedding = self.rel_embeddings(rel_tmp_idx) # [bsz, rel_num, h]
-            rel_embedding = rel_embedding.unsqueeze(1).expand(-1, seq_len, -1, -1)  # [bsz, seq_len, rel_num, h]
+        # # [deprecated] 计算关系表
+        # if self.config.use_rel_maps:
+        #     rel_maps_logits = self.get_rel_map_logits(input_ids, hidden_state, bsz, seq_len, output)
+        #     output["rel_maps_logits"] = rel_maps_logits
 
-            seq_output = hidden_state.unsqueeze(2).expand(-1, -1, self.rel_num, -1)  # [bsz, seq_len, rel_num, h]
-            seq_output = torch.cat([seq_output, rel_embedding], dim=-1) # [bsz, seq_len, rel_num, h * 2]
+        # # [deprecated] 实体对应损失
+        # if self.config.use_ent_corres:
+        #     ent_corres_logits = self.get_corres_tabel(hidden_state, hidden_state)
+        #     output["ent_corres_logits"] = ent_corres_logits
 
-            sub_cls = self.sub_cls(seq_output).squeeze(-1) # [bsz, seq_len, rel_num]
-            obj_cls = self.obj_cls(seq_output).squeeze(-1) # [bsz, seq_len, rel_num]
-
-            rel_maps_logits = torch.cat([sub_cls, obj_cls], dim=-1) # [bsz, seq_len, rel_num * 2]
-            output["rel_maps_logits"] = rel_maps_logits
-
-        # [deprecated] 实体对应损失
-        if self.config.use_ent_corres:
-            ent_corres_logits = self.get_corres_tabel(hidden_state, hidden_state)
-            output["ent_corres_logits"] = ent_corres_logits
+        # [deprecated] 实体识别损失
+        # if self.config.use_span:
+        #     span_logits, span_loss = self.span_model(hidden_state, pos=pos, labels=ent_maps)
+        #     output["span_logits"] = span_logits
+        #     entities = self.span_model.decode_entities(ent_maps, pos=pos) # gold entities
 
         # [OPTIONAL] 命名实体识别损失
-        if self.config.use_span:
-            span_logits, span_loss = self.span_model(hidden_state, pos=pos, labels=span_maps)
-            output["span_logits"] = span_logits
+        if self.config.use_ner:
+            ner_logits, ner_loss = self.ner_model(hidden_state, pos=pos, labels=ent_maps)
+            output["ner_logits"] = ner_logits
 
-        entities = self.span_model.decode_entities(span_maps, pos=pos) # gold entities
-        # entities = self.span_model.decode_entities(span_logits, pos=pos) # pred entities
+        if mode == "train":
+            entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
+        else:
+            entities = self.ner_model.decode_entities(ner_logits, pos=pos)
+
+        # 1. 在原本的句子后面拼上实体的 tag
+        assert not self.config.use_independent_plm or self.config.use_two_stage # 使用独立的预训练模型，必须使用两阶段训练
+        if self.config.use_two_stage:
+            rel_input_ids = input_ids.clone().detach()
+            rel_attention_mask = attention_mask.clone().detach()
+            position_ids = torch.arange(seq_len, device=self.device).unsqueeze(0).expand(bsz, seq_len)
+            for i in range(bsz):
+                tag = []
+                pos_id = []
+                entity = entities[i]
+                for e in entity: # e: [start, end, ent_id] e.g. [[3, 4, 6], [4, 6, 2], [6, 12, 6]]
+                    tag.append(self.ent_ids[e[2]+1]) # B tag, +1 是因为 O 的 id 是 0
+                    tag.extend([self.ent_ids[e[2]+self.ent_num+1]] * (e[1] - e[0] - 1)) # I tag
+                    pos_id.extend(np.arange(e[0], e[1]).tolist())
+
+                assert len(tag) + pos[i,1] <= seq_len, "entity is too long."
+                assert len(tag) == len(pos_id), "tag and pos_id should have the same length."
+
+                tag_len = len(tag)
+                tokens_num = min(seq_len, rel_attention_mask[i].sum().item() + tag_len)
+                rel_input_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(tag, device=self.device)
+                rel_input_ids[i, tokens_num-1] = self.tokenizer.sep_token_id
+                position_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(pos_id, device=self.device)
+                rel_attention_mask[i, :tokens_num] = 1
+
+            # 2. 重新计算 hidden state
+            if self.config.use_independent_plm:
+                outputs = self.plm_model_for_re(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
+                ent_type_embeddings = self.plm_model_for_re.get_output_embeddings().weight[self.ent_ids]
+            else:
+                outputs = self.plm_model(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
+                ent_type_embeddings = self.plm_model.get_output_embeddings().weight[self.ent_ids]
+
+            rel_last_hidden_state = outputs.hidden_states[-1]
+
+        else:
+            rel_last_hidden_state = hidden_state
+            ent_type_embeddings = self.plm_model.get_output_embeddings().weight[self.ent_ids]
+
 
         if self.config.use_rel_cls:
-            assert self.config.use_span, "need to use NER model to get entity position."
+            assert self.config.use_span or self.config.use_ner, "need to use NER model to get entity position."
 
-            ent_groups, rel_hidden_states, triple_labels = self.rel_model.prepare(triples, hidden_state, entities)
+            ent_groups, rel_hidden_states, triple_labels = self.rel_model.prepare(triples, rel_last_hidden_state, entities, ent_type_embeddings)
 
-            rel_logits, rel_loss = self.rel_model(rel_hidden_states, lmhead=self.lmhead, labels=triple_labels)
+            rel_logits, rel_loss = self.rel_model(rel_hidden_states, labels=triple_labels)
             triples_pred = [ent_groups[i] + [rel_logits[i].argmax().item()] for i in range(len(ent_groups))]
 
             output["triples_pred"] = triples_pred
             triples_gold_count = sum([len([t for t in t_ if t[-1] != -1]) for t_ in triples])
-            self.log("pred_triples_rate", (len(triples_pred) + 1) / (triples_gold_count+1))
+            self.log("pred_triples_rate", (len(triples_pred)+1) / (triples_gold_count+1))
 
         # 计算损失
         if mode != "test":
 
             loss = torch.tensor(0.0, device=input_ids.device)
 
-            # [deprecated] 关系表损失
-            if self.config.use_rel_maps:
-                rel_maps = None # TODO
-                rel_mask = torch.zeros_like(rel_maps)
-                for b in range(bsz):
-                    rel_mask[b, pos[b, 0]:pos[b, 1]] = 1
+            # # [deprecated] 关系表损失
+            # if self.config.use_rel_maps:
+            #     rel_maps_loss = self.get_rel_map_loss(pos, bsz, rel_maps_logits)
+            #     self.log("rel_map_loss", rel_maps_loss)
 
-                rel_maps_loss = self.bce_loss_fn(rel_maps_logits, rel_maps.float())
-                rel_maps_loss = (rel_maps_loss * rel_mask).sum() / rel_mask.sum()
-                self.log("rel_map_loss", rel_maps_loss)
+            # # [deprecated] 实体对应损失
+            # if self.config.use_ent_corres:
+            #     ent_corres_loss = self.get_corres_loss(pos, ent_corres, bsz, ent_corres_logits)
+            #     self.log("corres_loss", ent_corres_loss)
+            #     loss += ent_corres_loss
 
-            # [deprecated] 实体对应损失
-            if self.config.use_ent_corres:
-                ent_corres_mask = torch.zeros_like(ent_corres_logits)
-                for b in range(bsz):
-                    ent_corres_mask[b, pos[b, 0]:pos[b, 1], pos[b, 0]:pos[b, 1]] = 1
-
-                ent_corres_loss = self.bce_loss_fn(ent_corres_logits, ent_corres.float())
-                ent_corres_loss = (ent_corres_loss * ent_corres_mask).sum() / ent_corres_mask.sum()
-                self.log("corres_loss", ent_corres_loss)
-                loss += ent_corres_loss
-
-            if self.config.use_span:
-                self.log("span_loss", span_loss)
-                loss += span_loss
+            # if self.config.use_span:
+            #     self.log("span_loss", span_loss)
+            #     loss += span_loss
 
             if self.config.use_rel_cls and rel_loss: # 有时是 None
                 self.log("rel_loss", rel_loss)
                 loss += rel_loss
 
+            if self.config.use_ner:
+                self.log("ner_loss", ner_loss)
+                loss += ner_loss
+
             output["loss"] = loss
 
         return output
 
+    # Train https://pytorch-lightning.readthedocs.io/en/stable/api/pytorch_lightning.core.LightningModule.html#pytorch_lightning.core.LightningModule.training_step
+    def training_step(self, batch, batch_idx):
 
+        loss = self(batch, mode="train")["loss"]
+        self.log('train_loss', loss)
+
+        lr_step = {}
+        for i, pg in enumerate(self.optimizers().param_groups):
+            lr_step[f"lr_{i}"] = pg["lr"]
+        self.log_dict(lr_step)
+
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        input_ids, _, pos, triples, ent_maps, _  = batch
+        output = self(batch, mode="dev")
+
+        loss = output["loss"]
+        self.log('val_loss', loss)
+
+        return self.eval_step_output(input_ids, pos, triples, ent_maps, output)
+
+    def validation_epoch_end(self, outputs):
+        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
+        ner_f1, ner_p, ner_r = f1_score(outputs, 'pred_entities', 'gold_entities')
+
+        self.best_f1 = max(f1, self.best_f1)
+        self.log_dict_values({'val_p': p, 'val_r': r})
+        self.log_dict_values({'val_f1': f1, 'best_f1': self.best_f1}, on_epoch=True, prog_bar=True)
+        self.log_dict_values({'val_ner_f1': ner_f1, 'val_ner_p': ner_p, 'val_ner_r': ner_r})
+
+    def test_step(self, batch, batch_idx):
+        input_ids, _, pos, triples, ent_maps, _  = batch
+        output = self(batch, mode="test")
+
+        return self.eval_step_output(input_ids, pos, triples, ent_maps, output)
+
+    def test_epoch_end(self, outputs):
+        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
+        ner_f1, ner_p, ner_r = f1_score(outputs, 'pred_entities', 'gold_entities')
+
+        self.test_f1 = f1
+        self.log_dict_values({'test_f1': f1, 'test_p': p, 'test_r': r})
+        self.log_dict_values({'test_ner_f1': ner_f1, 'test_ner_p': ner_p, 'test_ner_r': ner_r})
+
+    def eval_step_output(self, input_ids, pos, triples, ent_maps, output):
+        if self.config.use_ner:
+            pred_entities = self.ner_model.decode_entities(output["ner_logits"], pos=pos)
+            gold_entities = self.ner_model.decode_entities(ent_maps, pos=pos)
+            pred_entities = self.get_span_set(input_ids, pred_entities)
+            gold_entities = self.get_span_set(input_ids, gold_entities)
+
+        pred_triples, gold_triples = self.get_triple_set(input_ids, triples, output)
+
+        return {
+            'pred_entities': pred_entities,
+            'gold_entities': gold_entities,
+            'pred_triples': pred_triples,
+            'gold_triples': gold_triples,
+        }
+
+
+    # Optimizer https://pytorch-lightning.readthedocs.io/en/stable/api/pytorch_lightning.core.LightningModule.html#pytorch_lightning.core.LightningModule.configure_optimizers
+    def configure_optimizers(self):
+        return get_optimizer(self, self.config)
+
+    def get_triple_set(self, input_ids, triples, output):
+        pred_triples = set()
+        # start, end 是左闭右开区间
+        # [batch_idx, sub_start, sub_end, obj_start, obj_end, sub_type, obj_type, rel_idx]
+        #  0          1          2        3          4        5         6         7 (include NA)
+        for t in output["triples_pred"]:
+            if t[7] != 0:
+                sub_token = self.tokenizer.decode(input_ids[t[0], t[1]:t[2]])
+                obj_token = self.tokenizer.decode(input_ids[t[0], t[3]:t[4]])
+                rel_type = self.config.dataset.rels[t[7]-1]
+                sub_type = self.config.dataset.ents[t[5]]
+                obj_type = self.config.dataset.ents[t[6]]
+                triple = (sub_token, obj_token, rel_type, sub_type, obj_type)
+                if self.config.use_rel_strict:
+                    pred_triples.add(triple)
+                else:
+                    pred_triples.add(triple[:3])
+
+        gold_triples = set()
+        # [sub_start, sub_end, obj_start, obj_end, rel_idx, sub_type, obj_type]
+        #  0          1        2          3        4(No NA) 5         6
+        for b in range(input_ids.shape[0]):
+            for t in triples[b]:
+                if t[4] != -1:
+                    sub_token = self.tokenizer.decode(input_ids[b, t[0]:t[1]])
+                    obj_token = self.tokenizer.decode(input_ids[b, t[2]:t[3]])
+                    rel_type = self.config.dataset.rels[t[4]]
+                    sub_type = self.config.dataset.ents[t[5]]
+                    obj_type = self.config.dataset.ents[t[6]]
+                    triple = (sub_token, obj_token, rel_type, sub_type, obj_type)
+                    if self.config.use_rel_strict:
+                        gold_triples.add(triple)
+                    else:
+                        gold_triples.add(triple[:3])
+                else:
+                    break
+        return pred_triples,gold_triples
+
+    def get_span_set(self, input_ids, entities):
+        entities_token = set()
+        for b in range(input_ids.shape[0]):
+            for e in entities[b]:
+                ent_token = self.tokenizer.decode(input_ids[b, e[0]:e[1]])
+                ent_type = self.config.dataset.ents[e[2]]
+                entities_token.add((ent_token, ent_type))
+        return entities_token
+
+    # [deprecated]
+    def get_corres_loss(self, pos, ent_corres, bsz, ent_corres_logits):
+        ent_corres_mask = torch.zeros_like(ent_corres_logits)
+        for b in range(bsz):
+            ent_corres_mask[b, pos[b, 0]:pos[b, 1], pos[b, 0]:pos[b, 1]] = 1
+
+        ent_corres_loss = self.bce_loss_fn(ent_corres_logits, ent_corres.float())
+        ent_corres_loss = (ent_corres_loss * ent_corres_mask).sum() / ent_corres_mask.sum()
+        return ent_corres_loss
+
+    # [deprecated]
+    def get_rel_map_loss(self, pos, bsz, rel_maps_logits):
+        rel_maps = None # TODO
+        rel_mask = torch.zeros_like(rel_maps)
+        for b in range(bsz):
+            rel_mask[b, pos[b, 0]:pos[b, 1]] = 1
+
+        rel_maps_loss = self.bce_loss_fn(rel_maps_logits, rel_maps.float())
+        rel_maps_loss = (rel_maps_loss * rel_mask).sum() / rel_mask.sum()
+        return rel_maps_loss
+
+    # [deprecated]
+    def get_rel_map_logits(self, input_ids, hidden_state):
+        bsz, seq_len, h = hidden_state.shape
+        rel_tmp_idx = torch.arange(0, self.rel_num, device=input_ids.device)
+        rel_tmp_idx = rel_tmp_idx.unsqueeze(0).repeat(bsz, 1) # [bsz, rel_num]
+        rel_embedding = self.rel_embeddings(rel_tmp_idx) # [bsz, rel_num, h]
+        rel_embedding = rel_embedding.unsqueeze(1).expand(-1, seq_len, -1, -1)  # [bsz, seq_len, rel_num, h]
+
+        seq_output = hidden_state.unsqueeze(2).expand(-1, -1, self.rel_num, -1)  # [bsz, seq_len, rel_num, h]
+        seq_output = torch.cat([seq_output, rel_embedding], dim=-1) # [bsz, seq_len, rel_num, h * 2]
+
+        sub_cls = self.sub_cls(seq_output).squeeze(-1) # [bsz, seq_len, rel_num]
+        obj_cls = self.obj_cls(seq_output).squeeze(-1) # [bsz, seq_len, rel_num]
+
+        rel_maps_logits = torch.cat([sub_cls, obj_cls], dim=-1) # [bsz, seq_len, rel_num * 2]
+        return rel_maps_logits
+
+    # [deprecated]
     def get_corres_tabel(self, sub_hs, obj_hs, rel_hs=None):
         """[deprecated] 获取对应的关系表
 
@@ -241,94 +457,7 @@ class Theta(pl.LightningModule):
 
         return corres_table
 
-    # Train https://pytorch-lightning.readthedocs.io/en/stable/api/pytorch_lightning.core.LightningModule.html#pytorch_lightning.core.LightningModule.training_step
-
-    def training_step(self, batch, batch_idx):
-
-        loss = self(batch, mode="train")["loss"]
-        self.log('train_loss', loss)
-
-        lr_step = {}
-        for i, pg in enumerate(self.optimizers().param_groups):
-            lr_step[f"lr_{i}"] = pg["lr"]
-        self.log_dict(lr_step)
-
-        return loss
-
-    def validation_step(self, batch, batch_idx):
-        input_ids, _, _, triples, _, _  = batch
-        output = self(batch, mode="dev")
-
-        pred_triples = set()
-        for t in output["triples_pred"]:
-            if t[5] != 0:
-                sub_token = self.tokenizer.decode(input_ids[t[0], t[1]:t[2]])
-                obj_token = self.tokenizer.decode(input_ids[t[0], t[3]:t[4]])
-                pred_triples.add((sub_token, obj_token, self.config.dataset.rels[t[5]-1]))
-
-        gold_triples = set()
-        for b in range(input_ids.shape[0]):
-            for t in triples[b]:
-                if t[4] != -1:
-                    sub_token = self.tokenizer.decode(input_ids[b, t[0]:t[1]])
-                    obj_token = self.tokenizer.decode(input_ids[b, t[2]:t[3]])
-                    gold_triples.add((sub_token, obj_token, self.config.dataset.rels[t[4]]))
-                else:
-                    break
-
-        loss = output["loss"]
-        self.log('val_loss', loss)
-
-        return {
-            'pred_triples': pred_triples,
-            'gold_triples': gold_triples,
-        }
-
-    def validation_epoch_end(self, outputs):
-        f1, p, r = f1_score(outputs)
-
-        self.best_f1 = max(f1, self.best_f1)
-        self.log_dict_values({'val_p': p, 'val_r': r})
-        self.log_dict_values({'val_f1': f1, 'best_f1': self.best_f1}, on_epoch=True, prog_bar=True)
-
-    def test_step(self, batch, batch_idx):
-
-        input_ids, _, _, triples, _, _  = batch
-        output = self(batch, mode="test")
-
-        pred_triples = set()
-        for t in output["triples_pred"]:
-            if t[5] != 0:
-                sub_token = self.tokenizer.decode(input_ids[t[0], t[1]:t[2]])
-                obj_token = self.tokenizer.decode(input_ids[t[0], t[3]:t[4]])
-                pred_triples.add((sub_token, obj_token, self.config.dataset.rels[t[5]-1]))
-
-        gold_triples = set()
-        for b in range(input_ids.shape[0]):
-            for t in triples[b]:
-                if t[4] != -1:
-                    sub_token = self.tokenizer.decode(input_ids[b, t[0]:t[1]])
-                    obj_token = self.tokenizer.decode(input_ids[b, t[2]:t[3]])
-                    gold_triples.add((sub_token, obj_token, self.config.dataset.rels[t[4]]))
-                else:
-                    break
-
-        return {
-            'pred_triples': pred_triples,
-            'gold_triples': gold_triples,
-        }
-
-    def test_epoch_end(self, outputs):
-
-        f1, p, r = f1_score(outputs)
-
-        self.test_f1 = f1
-        self.log_dict_values({'test_f1': f1, 'test_p': p, 'test_r': r})
-
-    # Optimizer https://pytorch-lightning.readthedocs.io/en/stable/api/pytorch_lightning.core.LightningModule.html#pytorch_lightning.core.LightningModule.configure_optimizers
-    def configure_optimizers(self):
-        return get_optimizer(self, self.config)
-
+    # [deprecated]
     def decode_label_triples(self, ent_corres, rel_maps, input_ids, pos):
         """Convert table to triplet, can be used for ground truth"""
 
@@ -368,6 +497,7 @@ class Theta(pl.LightningModule):
 
         return triples
 
+    # [deprecated]
     def deocde_triples(self, ent_corres, rel_maps, input_ids, pos, with_confidence=False):
         """Convert table to triplet, can be used for both prediction and ground truth
 

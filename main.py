@@ -44,7 +44,7 @@ def main(func_mode=False, **kwargs):
     )
     callbacks = [early_callback, model_checkpoint] if not config.fast_dev_run else []
 
-    gpu_count = torch.cuda.device_count()
+    # gpu_count = torch.cuda.device_count()
 
     # Configure Trainer
     trainer = pl.Trainer.from_argparse_args(

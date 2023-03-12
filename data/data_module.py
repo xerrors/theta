@@ -56,7 +56,7 @@ class DataModule(pl.LightningDataModule):
             features["attention_mask"],
             features["pos"],
             features["triples"],
-            features["span_maps"],
+            features["ent_maps"],
             features["ent_corres"],
             )
 

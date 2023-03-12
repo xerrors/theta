@@ -2,7 +2,7 @@ import os
 
 from transformers import logging
 
-from .cprint import yellow, blue
+from .cprint import yellow, blue, green
 
 
 def config_logging(config):
@@ -39,7 +39,7 @@ def get_gpu_by_user_input():
 def confirm_value(key, value):
     """实现一个函数，函数接收一个默认值，让用户输入此次任务的tag，如果直接回车，则返回默认值"""
     if value:
-        new_value = input(f"\nPlease confirm {key} (default: {blue(value)}) >>> ")
+        new_value = input(f"\nPlease confirm {green(key)} (current is: {blue(value)}) >>> ")
         if new_value:
             value = new_value
 
@@ -52,7 +52,7 @@ def confirm_bool(key, value):
     new_value = "none"
 
     while new_value not in ["y", "n", ""]:
-        new_value = input(f"\nPlease confirm {key} (default: {blue(value)}) [y]/n >>> ")
+        new_value = input(f"\nPlease confirm {green(key)} (current is: {blue(value)}) [y]/n >>> ")
 
     new_value = True if not new_value or new_value == "y" else False
     return new_value
