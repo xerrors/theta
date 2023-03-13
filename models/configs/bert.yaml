@@ -1,2 +1,2 @@
 name: BERT
-model_name_or_path: bert-base-cased
+model_name_or_path: bert-base-uncased
