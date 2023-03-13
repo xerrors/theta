@@ -1,6 +1,6 @@
 name: ace2005
 rel_num: 6
-data_dir: data/datasets/ace2005-rc
+data_dir: datasets/ace2005
 na_label: None
 train: datasets/ace2005/json/train.json
 val: datasets/ace2005/json/dev.json
