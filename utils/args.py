@@ -47,7 +47,7 @@ def setup_parser(func_mode, **kwargs):
         known_args, _ = parser.parse_known_args()
         default_args = vars(known_args)
         for key, value in kwargs.items():
-            if key in default_args:
+            if key in default_args and default_args[key] != value:
                 print(f"[{key}]: {default_args[key]} ==> ",
                       utils.purple(value))
                 default_args[key] = value
