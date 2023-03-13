@@ -112,7 +112,19 @@ class REModel(pl.LightningModule):
             self.lmhead = lmhead
 
     def prepare(self, theta, batch, hidden_state, triples, entities):
-        """Get hidden state for the 2nd stage: relation classification"""
+        """Get hidden state for the 2nd stage: relation classification
+
+        Use Config:
+            use_two_stage: True / False (default: False), 是否使用两阶段训练
+            use_independent_plm: True / False (default: False), 是否使用独立的预训练模型
+            use_rel_cls: multi_classifier / lmhead (default: lmhead), 关系分类器的类型
+            use_ner: multi_classifier / lmhead (default: lmhead), 命名实体识别器的类型
+            use_ent_type_in_rel: True / False (default: False), 是否使用实体类型作为关系分类的输入
+
+        Constraints:
+            1. use_two_stage must be True if use_independent_plm is True
+
+        """
         input_ids, attention_mask, pos, _, _, _ = batch
         bsz, seq_len, h = hidden_state.shape
 
