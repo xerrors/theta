@@ -196,6 +196,7 @@ class REModel(pl.LightningModule):
         if len(ent_groups) != 0:
             # 构建 rel_stage_hs, ent [batch_idx, sub_start, sub_end, end_start, end_end, sub_type, end_type]
             for ent in ent_groups:
+                sent_s = pos[ent[0], 0]
                 sub_hidden_state = rel_stage_hs[ent[0], ent[1]-sent_s+1]
                 obj_hidden_state = rel_stage_hs[ent[0], ent[3]-sent_s+1]
 
