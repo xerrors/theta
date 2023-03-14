@@ -63,6 +63,7 @@ def exec_main(config):
 
     config["run_id"] = run_id
     config["fast_dev_run"] = args.fast_dev_run
+    config["output"] = args.output
     if not config.get("gpt") or config.get("gpt") not in ["0", "1", "2", "3"]:
         config["gpu"] = GPU
 
@@ -83,6 +84,7 @@ GPU = get_gpu_by_user_input()
 parser = argparse.ArgumentParser(add_help=False)
 # 添加一个 --fast-dev-run 的 argsparser 配置
 parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
+parser.add_argument("--output", type=str, default="output", help="Output directory")
 args, _ = parser.parse_known_args()
 
 # 生成所有的组合
