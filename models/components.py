@@ -111,7 +111,12 @@ class REModel(pl.LightningModule):
         elif config.use_rel_cls == 'lmhead':
             self.lmhead = lmhead
 
-    def prepare(self, theta, batch, hidden_state, triples, entities):
+        if self.config.use_rel_mask:
+            self.prepare = self.prepare_with_mask
+        else:
+            self.prepare = self.prepare_origin
+
+    def prepare_origin(self, theta, batch, hidden_state, triples, entities):
         """Get hidden state for the 2nd stage: relation classification
 
         Use Config:
@@ -136,41 +141,48 @@ class REModel(pl.LightningModule):
         assert not config.use_independent_plm or config.use_two_stage # 使用独立的预训练模型，必须使用两阶段训练
         if config.use_two_stage:
             # 1. 在原本的句子后面拼上实体的 tag
-            rel_input_ids = input_ids.clone().detach()
-            rel_attention_mask = attention_mask.clone().detach()
+            rel_input_ids = torch.zeros_like(input_ids).fill_(config.model.pad_token_id)
+            rel_attention_mask = torch.zeros_like(attention_mask)
             position_ids = torch.arange(seq_len, device=device).unsqueeze(0).expand(bsz, seq_len)
             for i in range(bsz):
                 tag = []
                 pos_id = []
                 entity = entities[i]
+                sent_s, sent_e = pos[i, 0], pos[i, 1]
                 for e in entity: # e: [start, end, ent_id] e.g. [[3, 4, 6], [4, 6, 2], [6, 12, 6]]
                     tag.append(ent_ids[e[2]+1]) # B tag, +1 是因为 O 的 id 是 0
                     tag.extend([ent_ids[e[2]+ent_num+1]] * (e[1] - e[0] - 1)) # I tag
                     pos_id.extend(np.arange(e[0], e[1]).tolist())
 
-                assert len(tag) + pos[i,1] <= seq_len, "entity is too long."
+                assert len(tag) + sent_e <= seq_len, "entity is too long."
                 assert len(tag) == len(pos_id), "tag and pos_id should have the same length."
 
                 tag_len = len(tag)
-                tokens_num = min(seq_len, rel_attention_mask[i].sum().item() + tag_len)
-                rel_input_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(tag, device=device)
-                rel_input_ids[i, tokens_num-1] = theta.tokenizer.sep_token_id
-                position_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(pos_id, device=device)
-                rel_attention_mask[i, :tokens_num] = 1
+                # tokens_num = min(seq_len, rel_attention_mask[i].sum().item() + tag_len)
+                # rel_input_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(tag, device=device)
+                # rel_input_ids[i, tokens_num-1] = theta.tokenizer.sep_token_id
+                # position_ids[i, tokens_num-tag_len-1:tokens_num-1] = torch.tensor(pos_id, device=device)
+                # rel_attention_mask[i, :tokens_num] = 1
+
+                sent_len = sent_e - sent_s
+                tag = torch.tensor(tag, device=hidden_state.device)
+                pos_id = torch.tensor(pos_id, device=hidden_state.device)
+                pos_id = pos_id - sent_s + 1 # 0 为 cls
+
+                rel_input_ids[i, 0] = theta.tokenizer.cls_token_id                   # CLS
+                rel_input_ids[i, 1:sent_len+1] = input_ids[i, sent_s:sent_e]         # SENT
+                rel_input_ids[i, sent_len+1:sent_len+1+tag_len] = tag                # TAG
+                rel_input_ids[i, sent_len+1+tag_len] = theta.tokenizer.sep_token_id  # SEP
+                rel_attention_mask[i, :sent_len+1+tag_len+1] = 1
+                position_ids[i, sent_len+1:sent_len+1+tag_len] = pos_id
 
             # 2. 重新计算 hidden state
-            if config.use_independent_plm:
-                outputs = theta.plm_model_for_re(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
-                ent_type_embeddings = theta.plm_model_for_re.get_output_embeddings().weight[ent_ids]
-            else:
-                outputs = theta.plm_model(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
-                ent_type_embeddings = theta.plm_model.get_output_embeddings().weight[ent_ids]
-
-            rel_last_hidden_state = outputs.hidden_states[-1]
+            plm_model = theta.plm_model_for_re if self.config.use_independent_plm else theta.plm_model
+            outputs = plm_model(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
+            rel_stage_hs = outputs.hidden_states[-1]
 
         else:
-            rel_last_hidden_state = hidden_state
-            ent_type_embeddings = theta.plm_model.get_output_embeddings().weight[ent_ids]
+            rel_stage_hs = hidden_state
 
         ent_groups = []
         for i, entity in enumerate(entities):
@@ -182,14 +194,10 @@ class REModel(pl.LightningModule):
         triple_labels = torch.zeros(len(ent_groups), device=device, dtype=torch.long)
 
         if len(ent_groups) != 0:
-            # 构建 rel_last_hidden_state, ent [batch_idx, sub_start, sub_end, end_start, end_end, sub_type, end_type]
+            # 构建 rel_stage_hs, ent [batch_idx, sub_start, sub_end, end_start, end_end, sub_type, end_type]
             for ent in ent_groups:
-                sub_hidden_state = rel_last_hidden_state[ent[0], ent[1]]
-                obj_hidden_state = rel_last_hidden_state[ent[0], ent[3]]
-
-                if config.use_ner and config.use_ent_type_in_rel:
-                    sub_hidden_state = sub_hidden_state + ent_type_embeddings[ent[5]+1] # B-Tag
-                    obj_hidden_state = obj_hidden_state + ent_type_embeddings[ent[6]+1] # B-Tag
+                sub_hidden_state = rel_stage_hs[ent[0], ent[1]-sent_s+1]
+                obj_hidden_state = rel_stage_hs[ent[0], ent[3]-sent_s+1]
 
                 rel_hidden_state = obj_hidden_state - sub_hidden_state
                 rel_hidden_states.append(rel_hidden_state)
@@ -197,19 +205,98 @@ class REModel(pl.LightningModule):
             rel_hidden_states = torch.stack(rel_hidden_states, dim=0)
 
             # 从 triples 中构建标签
-            for i, pair in enumerate(ent_groups):
-                b = pair[0]
-                # t: [sub_start, sub_end, obj_start, obj_end, rel, sub_type, obj_type]
-                for t in triples[b]:
-                    # 找不到
-                    if t[-1] == -1:
-                        break
-                    # 找到了
-                    if t[:4].tolist() == pair[1:5]:
-                        triple_labels[i] = t[4] + 1
-                        break
+            triple_labels = self.get_triples_label(triples, device, ent_groups)
 
         return ent_groups, rel_hidden_states, triple_labels
+
+    def get_triples_label(self, triples, device, ent_groups):
+        triple_labels = torch.zeros(len(ent_groups), device=device, dtype=torch.long)
+        for i, pair in enumerate(ent_groups):
+            b = pair[0]
+                # t: [sub_start, sub_end, obj_start, obj_end, rel, sub_type, obj_type]
+            for t in triples[b]:
+                    # 找不到
+                if t[-1] == -1:
+                    break
+                    # 找到了
+                if t[:4].tolist() == pair[1:5]:
+                    triple_labels[i] = t[4] + 1
+                    break
+
+        return triple_labels
+
+    def prepare_with_mask(self, theta, batch, hidden_state, triples, entities):
+        """Get hidden state for the 2nd stage: relation classification"""
+        assert self.config.use_two_stage, "use_two_stage must be True"
+
+        ent_ids = theta.ent_ids
+        input_ids, attention_mask, pos, _, _, _ = batch
+        bsz, seq_len = input_ids.shape
+
+        # 先以最大尺寸构建
+        rel_input_ids = torch.zeros(bsz, 512, dtype=torch.long, device=hidden_state.device).fill_(theta.tokenizer.pad_token_id)
+        rel_attention_mask = torch.zeros(bsz, 512, dtype=torch.long, device=hidden_state.device)
+        position_ids = torch.arange(512, dtype=torch.long, device=hidden_state.device).expand(bsz, 512)
+
+        # 1. 构建 rel_input_ids, rel_attention_mask, position_ids
+        ent_groups = []
+        for i, entity in enumerate(entities):
+            tag = []
+            pos_id = []
+            sent_s, sent_e = pos[i, 0], pos[i, 1]
+            for ent_pair in itertools.permutations(entity, 2):
+                sub_pos, obj_pos = ent_pair
+                tag.extend([ent_ids[sub_pos[2]+1], theta.tokenizer.mask_token_id, ent_ids[obj_pos[2]+1]])
+                pos_id.extend([sub_pos[0], sub_pos[0], obj_pos[0]])
+                ent_groups.append([i, sub_pos[0], sub_pos[1], obj_pos[0], obj_pos[1], sub_pos[2], obj_pos[2]])
+
+            max_tag_len = 512 - (sent_e - sent_s) - 2
+            tag = tag[:max_tag_len]
+            pos_id = pos_id[:max_tag_len]
+            assert len(tag) == len(pos_id) and len(tag) + sent_e <= 512, f"len(tag)={len(tag)}, len(pos_id)={len(pos_id)}, pos[i, 1]={pos[i, 1]}"
+
+            sent_len = sent_e - sent_s
+
+            tag = torch.tensor(tag, device=hidden_state.device)
+            tag_len = len(tag)
+            pos_id = torch.tensor(pos_id, device=hidden_state.device)
+            pos_id = pos_id - sent_s + 1 # 0 为 cls
+
+            """TODO
+            可以考虑分段进行，但是计算开销以及代码逻辑会变得复杂一些，先测试一下直接舍弃的效果
+            如果效果已经正常，则可以考虑分段进行
+            """
+
+            rel_input_ids[i, 0] = theta.tokenizer.cls_token_id                   # CLS
+            rel_input_ids[i, 1:sent_len+1] = input_ids[i, sent_s:sent_e]         # SENT
+            rel_input_ids[i, sent_len+1:sent_len+1+tag_len] = tag                # TAG
+            rel_input_ids[i, sent_len+1+tag_len] = theta.tokenizer.sep_token_id  # SEP
+            rel_attention_mask[i, :sent_len+1+tag_len+1] = 1
+            position_ids[i, sent_len+1:sent_len+1+tag_len] = pos_id
+
+        # 裁剪，以最小尺寸构建
+        max_len = rel_attention_mask.sum(dim=1).max()
+        rel_input_ids = rel_input_ids[:, :max_len]
+        rel_attention_mask = rel_attention_mask[:, :max_len]
+        position_ids = position_ids[:, :max_len]
+
+        rel_hidden_states = []
+        triple_labels = torch.zeros(len(ent_groups), device=hidden_state.device, dtype=torch.long)
+        if len(ent_groups) != 0:
+            # 2. 重新计算 hidden state
+            # TODO: like PURE, add attention_mask
+            plm_model = theta.plm_model_for_re if self.config.use_independent_plm else theta.plm_model
+            outputs = plm_model(rel_input_ids, attention_mask=rel_attention_mask, position_ids=position_ids, output_hidden_states=True)
+            rel_stage_hs = outputs.hidden_states[-1]
+
+            # 找到 mask 的 Hidden State
+            mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
+            rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
+
+            triple_labels = self.get_triples_label(triples, hidden_state.device, ent_groups)
+
+        return ent_groups, rel_hidden_states, triple_labels
+
 
     def forward(self, hidden_output, pos=None, labels=None):
 

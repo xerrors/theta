@@ -8,14 +8,20 @@ import utils
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
 
-index = ["seed", "lr"]
-run_config = {
-    "tag": "lambda",
-    "lr": [1e-4, 3e-5, 8e-6, 3e-6],
-    "seed": [42, 43],
-}
-
-run_configs = []
+index = []
+run_config = {}
+run_configs = [
+    {
+        "tag": "lambda-no-win-two-sep",
+        "use_two_stage": True,
+        "use_independent_plm": True,
+    },
+    {
+        "tag": "lambda-no-win-two",
+        "use_two_stage": True,
+        "use_independent_plm": False,
+    }
+]
 
 
 def get_gpu_by_user_input():
@@ -52,6 +58,7 @@ def get_all_combinations(run_config):
 
     return combinations
 
+
 def exec_main(config):
 
     config["run_id"] = run_id
@@ -69,6 +76,7 @@ def exec_main(config):
     except Exception as e:
         print(utils.red("[XJOBS]"), "Running Error: {}, Continue...".format(e))
         return None
+
 
 GPU = get_gpu_by_user_input()
 
