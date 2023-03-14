@@ -127,9 +127,9 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             input_ids = torch.tensor(input_ids, dtype=torch.long)
             assert sum(input_ids != tokenizer.pad_token_id) == sum(attention_mask != 0)
 
-            # 原本的 token 在现有的 tokens 序列中的起始位置
-            sent_start += 1
-            sent_end += sent_start
+            # 原本的 token 在现有的 tokens 序列中的起始位置，左闭右开
+            sent_start += 1         # sent_start 不包含 cls token 或者 context window 的 token
+            sent_end += sent_start  # sent_end 包含 sep token 或者 context window 的 token
 
             # 实体的位置索引映射
             start2idx = [i + sent_start for i in start2idx]
