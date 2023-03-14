@@ -90,7 +90,7 @@ class Config(SimpleConfig):
 
     def handle_config(self):
         # 确认 tag，如果是函数传参调用的模式，就不需要确认 tag
-        if not self.with_ext_config:
+        if not self.with_ext_config or self.no_borther_confirm:
             self.tag = utils.confirm_value("tag", self.tag)
 
             if self.debug and self.wandb:

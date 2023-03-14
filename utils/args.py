@@ -34,6 +34,7 @@ def setup_parser(func_mode, **kwargs):
     parser.add_argument("--num-worker", type=int, default=8)
     parser.add_argument("--tag", type=str, default="debug")
     parser.add_argument("--debug", action="store_true", default=False)
+    parser.add_argument("--no-borther-confirm", action="store_true", default=False)
 
     parser.add_argument("--test-from-ckpt", type=str, default=None)
 
