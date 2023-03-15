@@ -294,7 +294,7 @@ class REModel(pl.LightningModule):
             plm_model = plm_model.cuda() # 不知道为什么是 CPU，可能是因为 debug mode
             outputs = plm_model(
                 rel_input_ids,
-                attention_mask=rel_attention_mask_matrix,
+                attention_mask=rel_attention_mask,
                 position_ids=rel_positional_ids,
                 output_hidden_states=True
                 )
