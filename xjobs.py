@@ -8,21 +8,13 @@ import utils
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
 
-index = []
-run_config = {}
-run_configs = [
-    {
-        "tag": "lambda-no-win-two-sep",
-        "use_two_stage": True,
-        "use_independent_plm": True,
-    },
-    {
-        "tag": "lambda-no-win-two",
-        "use_two_stage": True,
-        "use_independent_plm": False,
-    }
-]
-
+index = ["use_rel_cls", "mask_token_position"]
+run_config = dict(
+    tag="zeta",
+    use_rel_cls=["lmhead", "multi_classifier"],
+    mask_token_position=["sub", "obj", "mid"]
+)
+run_configs = []
 
 def get_gpu_by_user_input():
 
@@ -90,14 +82,14 @@ args, _ = parser.parse_known_args()
 # 生成所有的组合
 combinations = get_all_combinations(run_config)
 
+for config in run_configs:
+    print(exec_main(config))
+
 for i, config in enumerate(combinations):
     config["tag"] = f"{config['tag']}"
     for key in index:
         if config.get(key):
             config["tag"] += f"-{key}_{config[key]}"
 
-    print(exec_main(config))
-
-for config in run_configs:
     print(exec_main(config))
 

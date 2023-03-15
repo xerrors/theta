@@ -28,14 +28,18 @@ context_window: 200  # make sure that context_window < max_seq_len
 dataset_config: datasets/ace2005/ace2005.yaml # can not be modified in ext_config
 
 # INFO: sub-task
-use_span: "" # lmhead, multi_classifier
 use_ner: "lmhead"
 use_rel_cls: "lmhead"
-use_two_stage: False
-use_independent_plm: False
-use_rel_mask: False
+use_two_stage: True
+use_independent_plm: True
+use_2d_attention_mask: True
+mask_token_position: "sub"
+
+use_rel_mask: True # Set As True
 
 use_ent_corres: "" # deprecated
 use_rel_maps: "" # deprecated
 use_ent_type_in_rel: False # deprecated
 use_crf: False # deprecated
+use_span: "" # lmhead, multi_classifier
+use_entity_pair_filter: True # removed
