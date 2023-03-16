@@ -391,7 +391,7 @@ class Theta(pl.LightningModule):
 
     # [deprecated]
     def get_rel_map_loss(self, pos, bsz, rel_maps_logits):
-        rel_maps = None # TODO
+        rel_maps = None
         rel_mask = torch.zeros_like(rel_maps)
         for b in range(bsz):
             rel_mask[b, pos[b, 0]:pos[b, 1]] = 1
