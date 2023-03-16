@@ -196,23 +196,30 @@ class Theta(pl.LightningModule):
 
             # 如果是训练阶段，使用 gold triples 计算损失，如果不是，仅保存预测的 triples 用于评估
             entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
-            rel_output = self.rel_model.prepare(self, batch, hidden_state, triples, entities)
-            ent_groups, rel_hidden_states, triple_labels = rel_output
-
-            rel_logits, rel_loss = self.rel_model(rel_hidden_states, labels=triple_labels)
-            triples_pred = [ent_groups[i] + [rel_logits[i].argmax().item()] for i in range(len(ent_groups))]
-            output["triples_pred_with_gold"] = triples_pred
-
-            if mode != "train":
-                # 如果是测试阶段，使用预测的 triples
-                entities = self.ner_model.decode_entities(ner_logits, pos=pos) # gold entities
+            if sum([len(e) for e in entities]) > 0:
                 rel_output = self.rel_model.prepare(self, batch, hidden_state, triples, entities)
-                ent_groups, rel_hidden_states, triple_labels = rel_output
+                ent_groups, rel_hidden_states, triple_labels, filter_loss = rel_output
 
                 rel_logits, rel_loss = self.rel_model(rel_hidden_states, labels=triple_labels)
                 triples_pred = [ent_groups[i] + [rel_logits[i].argmax().item()] for i in range(len(ent_groups))]
+                output["triples_pred_with_gold"] = triples_pred
+            else:
+                rel_loss = torch.tensor(0.0, device=input_ids.device)
+                filter_loss = torch.tensor(0.0, device=input_ids.device)
+                output["triples_pred_with_gold"] = []
 
-                output["triples_pred"] = triples_pred
+            if mode != "train":
+                # 如果是测试阶段，使用预测的 triples
+                entities = self.ner_model.decode_entities(ner_logits, pos=pos) # pred entities
+                if sum([len(e) for e in entities]) > 0:
+                    rel_output = self.rel_model.prepare(self, batch, hidden_state, triples, entities)
+                    ent_groups, rel_hidden_states, triple_labels = rel_output[:3]
+                    rel_logits, rel_loss = self.rel_model(rel_hidden_states, labels=triple_labels)
+                    triples_pred = [ent_groups[i] + [rel_logits[i].argmax().item()] for i in range(len(ent_groups))]
+                    output["triples_pred"] = triples_pred
+                else:
+                    rel_loss = torch.tensor(0.0, device=input_ids.device)
+                    output["triples_pred"] = []
 
         # 计算损失
         if mode != "test":
@@ -241,6 +248,10 @@ class Theta(pl.LightningModule):
             if self.config.use_ner:
                 self.log("ner_loss", ner_loss)
                 loss += ner_loss
+
+            if self.config.use_entity_pair_filter:
+                self.log("ent_pair_filter_loss", filter_loss)
+                loss += filter_loss
 
             output["loss"] = loss
 

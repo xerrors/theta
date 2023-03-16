@@ -8,15 +8,13 @@ import utils
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
 
-index = ["seed", "lr"]
-run_config = {
-    "tag": "lambda",
-    "lr": [1e-4, 3e-5, 8e-6, 3e-6],
-    "seed": [42, 43],
-}
-
+index = ["use_rel_cls", "mask_token_position"]
+run_config = dict(
+    tag="zeta",
+    use_rel_cls=["lmhead", "multi_classifier"],
+    mask_token_position=["sub", "obj", "mid"]
+)
 run_configs = []
-
 
 def get_gpu_by_user_input():
 
@@ -52,10 +50,12 @@ def get_all_combinations(run_config):
 
     return combinations
 
+
 def exec_main(config):
 
     config["run_id"] = run_id
     config["fast_dev_run"] = args.fast_dev_run
+    config["output"] = args.output
     if not config.get("gpt") or config.get("gpt") not in ["0", "1", "2", "3"]:
         config["gpu"] = GPU
 
@@ -70,15 +70,20 @@ def exec_main(config):
         print(utils.red("[XJOBS]"), "Running Error: {}, Continue...".format(e))
         return None
 
+
 GPU = get_gpu_by_user_input()
 
 parser = argparse.ArgumentParser(add_help=False)
 # 添加一个 --fast-dev-run 的 argsparser 配置
 parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
+parser.add_argument("--output", type=str, default="output", help="Output directory")
 args, _ = parser.parse_known_args()
 
 # 生成所有的组合
 combinations = get_all_combinations(run_config)
+
+for config in run_configs:
+    print(exec_main(config))
 
 for i, config in enumerate(combinations):
     config["tag"] = f"{config['tag']}"
@@ -86,8 +91,5 @@ for i, config in enumerate(combinations):
         if config.get(key):
             config["tag"] += f"-{key}_{config[key]}"
 
-    print(exec_main(config))
-
-for config in run_configs:
     print(exec_main(config))
 
