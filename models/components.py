@@ -255,9 +255,9 @@ class REModel(pl.LightningModule):
 
                     ent_groups.append([b, sub_pos[0], sub_pos[1], obj_pos[0], obj_pos[1], sub_pos[2], obj_pos[2]])
 
-            rel_input_ids.append(torch.tensor(ids, device=device))
-            rel_positional_ids.append(torch.tensor(pos_ids, device=device))
-            rel_attention_mask.append(torch.tensor(masks, device=device))
+            rel_input_ids.append(torch.tensor(ids))
+            rel_positional_ids.append(torch.tensor(pos_ids))
+            rel_attention_mask.append(torch.tensor(masks)) # 不要放到 cuda 上
 
         rel_input_ids = nn.utils.rnn.pad_sequence(rel_input_ids, batch_first=True, padding_value=pad_token)
         rel_positional_ids = nn.utils.rnn.pad_sequence(rel_positional_ids, batch_first=True, padding_value=0)
@@ -265,21 +265,33 @@ class REModel(pl.LightningModule):
         # 2D attention mask
         if self.config.use_2d_attention_mask:
             padding_length = rel_input_ids.shape[1]
-            rel_attention_mask_matrix = torch.zeros([bsz, padding_length, padding_length], device=device)
+            rel_attention_mask_matrix = torch.zeros([bsz, padding_length, padding_length])
 
             for b, m in enumerate(rel_attention_mask):
                 cur_len = len(m)
-                for i in range(cur_len):
-                    for j in range(cur_len):
+                matrix = []
+                # 这里的 m.tolist() 会比之前要好，在计算上面
+                for from_mask in m.tolist():
+                    matrix_i = []
+                    for to_mask in m.tolist():
                         # 每组实体只能看到自己的标记和句子中的文本
-                        if m[i] == 1 or m[i] == m[j]:
-                            rel_attention_mask_matrix[b, i, j] = 1
-            rel_attention_mask = rel_attention_mask_matrix
+                        if to_mask == 1 or from_mask == to_mask:
+                            matrix_i.append(1)
+                        else:
+                            matrix_i.append(0)
+
+                    matrix.append(matrix_i)
+                rel_attention_mask_matrix[b, :cur_len, :cur_len] = torch.tensor(matrix)
+
+            rel_attention_mask = rel_attention_mask_matrix.clone()
 
         else:
             rel_attention_mask = nn.utils.rnn.pad_sequence(rel_attention_mask, batch_first=True, padding_value=0)
             rel_attention_mask = (rel_attention_mask > 0).long()
 
+        rel_input_ids = rel_input_ids.to(device)
+        rel_positional_ids = rel_positional_ids.to(device)
+        rel_attention_mask = rel_attention_mask.to(device)
         assert rel_positional_ids.max() <= 512 and rel_positional_ids.min() >= 0, "positional ids Fault"
         assert rel_input_ids.shape == rel_positional_ids.shape
 

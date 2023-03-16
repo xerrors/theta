@@ -6,6 +6,7 @@ project: theta
 tag: default
 
 # INFO: Run
+num_worker: 12
 batch_size: 16 # can be overrided by model.yaml
 lr: 0.00003
 # decoder_lr: 0.00003
