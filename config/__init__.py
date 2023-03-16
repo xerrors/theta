@@ -98,13 +98,11 @@ class Config(SimpleConfig):
 
         # 创建此次实验的基本信息，运行时间，输出路径
         self.start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-        self.output_dir = os.path.join(
-            self.output, f"ouput-{self.start}-{self.tag}")
+        self.output_dir = os.path.join(self.output, f"ouput-{self.start}-{self.tag}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         if self.debug and not self.test_from_ckpt:
-            self.output_dir = os.path.join(
-                self.output, "debug", f"{self.start}-{self.tag}")
+            self.output_dir = os.path.join(self.output, "debug", f"{self.start}-{self.tag}")
             os.makedirs(self.output_dir, exist_ok=True)
 
         # 处理参数冲突
