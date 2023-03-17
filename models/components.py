@@ -21,84 +21,6 @@ class MultiNonLinearClassifier(nn.Module):
         return features_output
 
 
-class SpanModel(pl.LightningModule):
-    """用于NER的模型
-
-    用途：
-        1. 加载与命名实体相关的模型模块
-        2. 计算此部分的损失
-
-    """
-    def __init__(self, config, num_labels):
-        """初始化
-
-        Args:
-            config: 配置文件
-            num_labels: 标签的数量(BIO)
-            entity_type_num: 实体类型的标签数量
-        """
-        super().__init__()
-        self.config = config
-        self.num_labels = num_labels
-
-        self.dropout = nn.Dropout(config.model.hidden_dropout_prob)
-
-        if config.use_span == 'classifier':
-            self.classifier = nn.Linear(config.model.hidden_size, self.num_labels)
-        elif config.use_span == 'multi_classifier':
-            self.classifier = MultiNonLinearClassifier(config.model.hidden_size, self.num_labels)
-        else:
-            raise NotImplementedError(f"config.use_span={config.use_span} is not implemented!")
-
-    def forward(self, hidden_output, pos=None, labels=None):
-
-        hidden_output = self.dropout(hidden_output)
-        logits = self.classifier(hidden_output)
-
-        loss = None
-        bsz = logits.shape[0]
-        if labels is not None:
-            loss_fct = nn.CrossEntropyLoss(reduction='mean')
-            # Only keep active parts of the loss
-            if pos is not None:
-                labels = torch.cat([labels[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
-                labels = labels.view(-1)
-                new_logits = torch.cat([logits[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
-                new_logits = new_logits.view(-1, self.num_labels)
-            else:
-                new_logits = logits.view(-1, self.num_labels)
-                labels = labels.view(-1)
-
-            loss = loss_fct(new_logits, labels)
-
-        return logits, loss
-
-    def decode_entities(self, logits, pos=None):
-
-        if logits.shape[-1] == self.num_labels:
-            logits = torch.argmax(logits, dim=-1)
-
-        entities = []
-        bsz = logits.shape[0]
-        for b in range(bsz):
-            entity = []
-            # 1 表示 B，即实体的开始，2 表示 I，即实体的中间
-            start = False
-            sent_start, sent_end = pos[b,0], pos[b,1]
-            for i in range(sent_start, sent_end):
-                if logits[b, i] == 1:
-                    start = True
-                    entity.append([i, i+1])
-                elif logits[b, i] == 2 and start:
-                    entity[-1][1] = i+1
-                else:
-                    start = False
-
-            entities.append(entity)
-
-        return entities
-
-
 class REModel(pl.LightningModule):
 
     def __init__(self, config, rel_ids, ent_ids, lmhead):
@@ -112,6 +34,12 @@ class REModel(pl.LightningModule):
             self.lmhead = lmhead
 
         self.filter_entity_pair_net = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
+
+        self.sub_proj = nn.Linear(config.model.hidden_size, config.model.hidden_size)
+        self.obj_proj = nn.Linear(config.model.hidden_size, config.model.hidden_size)
+
+        if self.config.use_entity_pair_filter == "bilinear" or self.config.use_entity_pair_filter == "bilinear_proj":
+            self.bilinear = nn.Bilinear(config.model.hidden_size, config.model.hidden_size, 1)
 
     def convert_bij_to_index(self, bij, entities):
         """找到 batch i 中的第 i 个实体和第 j 个实体在 logits 里面的位置
@@ -138,15 +66,45 @@ class REModel(pl.LightningModule):
                 # 记录实体 e 在此 batch i 的所有实体中的位置，后面需要用到表格索引的
                 map_dict[(i, e[0])] = j
 
-            ent_hidden_state = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
-            ent_hidden_state_x = ent_hidden_state.unsqueeze(1).repeat(1, ent_hidden_state.shape[0], 1)    # (ent_num, ent_num, hidden_size)
-            ent_hidden_state_y = ent_hidden_state.unsqueeze(0).repeat(ent_hidden_state.shape[0], 1, 1)    # (ent_num, ent_num, hidden_size)
-            ent_hidden_state_pair = torch.cat([ent_hidden_state_x, ent_hidden_state_y], dim=-1)    # (ent_num, ent_num, hidden_size * 2)
-            ent_hidden_state_pair = ent_hidden_state_pair.view(-1, ent_hidden_state_pair.shape[-1])    # (ent_num * ent_num, hidden_size * 2)
-            logits.append(ent_hidden_state_pair)   # (batch_size, ent_num * ent_num, hidden_size * 2)
 
-        logits = torch.cat(logits, dim=0)    # (batch_size * ent_num * ent_num, hidden_size * 2)
-        logits = self.filter_entity_pair_net(logits).squeeze(-1)    # (batch_size * ent_num * ent_num)
+            ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
+            ent_num, hidden_size = ent_hs.shape
+
+            if self.config.use_entity_pair_filter == "cat_and_cls":
+                ent_hs_x = ent_hs.unsqueeze(1).repeat(1, ent_hs.shape[0], 1)    # (ent_num, ent_num, hidden_size)
+                ent_hs_y = ent_hs.unsqueeze(0).repeat(ent_hs.shape[0], 1, 1)    # (ent_num, ent_num, hidden_size)
+                ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1).view(-1, hidden_size * 2)    # (ent_num, ent_num, hidden_size * 2)
+                ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)   # (ent_num * ent_num,)
+
+            elif self.config.use_entity_pair_filter == "proj_then_cat":
+                ent_hs_x = self.sub_proj(ent_hs)
+                ent_hs_y = self.obj_proj(ent_hs)
+                ent_hs_x = ent_hs_x.unsqueeze(1).repeat(1, ent_hs.shape[0], 1)    # (ent_num, ent_num, hidden_size)
+                ent_hs_y = ent_hs_y.unsqueeze(0).repeat(ent_hs.shape[0], 1, 1)    # (ent_num, ent_num, hidden_size)
+                ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1).view(-1, hidden_size * 2)    # (ent_num, ent_num, hidden_size * 2)
+                ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)   # (ent_num * ent_num,)
+
+            elif self.config.use_entity_pair_filter == "attention":
+                ent_hs_x = self.sub_proj(ent_hs)
+                ent_hs_y = self.obj_proj(ent_hs)
+                ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(0,1)) / (ent_hs_x.shape[0] ** 0.5)    # (ent_num, ent_num, hidden_size)
+                ent_hs_pair = ent_hs_pair.view(-1, 1).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
+
+            elif self.config.use_entity_pair_filter == "bilinear_proj":
+                ent_hs_x = ent_hs.unsqueeze(1).repeat(1, ent_hs.shape[0], 1).view(-1, hidden_size)
+                ent_hs_y = ent_hs.unsqueeze(0).repeat(ent_hs.shape[0], 1, 1).view(-1, hidden_size)
+                ent_hs_pair = self.bilinear(ent_hs_x, ent_hs_y).squeeze(-1)
+
+            elif self.config.use_entity_pair_filter == "bilinear":
+                ent_hs_x = self.sub_proj(ent_hs)
+                ent_hs_y = self.obj_proj(ent_hs)
+                ent_hs_x = ent_hs_x.unsqueeze(1).repeat(1, ent_hs.shape[0], 1).view(-1, hidden_size)
+                ent_hs_y = ent_hs_y.unsqueeze(0).repeat(ent_hs.shape[0], 1, 1).view(-1, hidden_size)
+                ent_hs_pair = self.bilinear(ent_hs_x, ent_hs_y).squeeze(-1)
+
+            logits.append(ent_hs_pair)
+
+        logits = torch.cat(logits, dim=0)    # (batch_size * ent_num * ent_num,)
 
         loss = None
         if triples is not None:
@@ -243,12 +201,8 @@ class REModel(pl.LightningModule):
                     sub_pos_id = sub_pos[0] - sent_s + 1
                     obj_pos_id = obj_pos[0] - sent_s + 1
 
-                    if self.config.mask_token_position == 'sub':
-                        mask_pos_id = sub_pos_id
-                    elif self.config.mask_token_position == 'obj':
-                        mask_pos_id = obj_pos_id
-                    elif self.config.mask_token_position == 'mid':
-                        mask_pos_id = (sub_pos_id + obj_pos_id) // 2
+                    # experiments show that this is better than sub_pos_id and (sub_pos_id + obj_pos_id) // 2
+                    mask_pos_id = obj_pos_id
 
                     pos_ids += [sub_pos_id, mask_pos_id, obj_pos_id]
                     masks += [marker_mask] * 3
@@ -263,31 +217,26 @@ class REModel(pl.LightningModule):
         rel_positional_ids = nn.utils.rnn.pad_sequence(rel_positional_ids, batch_first=True, padding_value=0)
 
         # 2D attention mask
-        if self.config.use_2d_attention_mask:
-            padding_length = rel_input_ids.shape[1]
-            rel_attention_mask_matrix = torch.zeros([bsz, padding_length, padding_length])
+        padding_length = rel_input_ids.shape[1]
+        rel_attention_mask_matrix = torch.zeros([bsz, padding_length, padding_length])
 
-            for b, m in enumerate(rel_attention_mask):
-                cur_len = len(m)
-                matrix = []
-                # 这里的 m.tolist() 会比之前要好，在计算上面
-                for from_mask in m.tolist():
-                    matrix_i = []
-                    for to_mask in m.tolist():
-                        # 每组实体只能看到自己的标记和句子中的文本
-                        if to_mask == 1 or from_mask == to_mask:
-                            matrix_i.append(1)
-                        else:
-                            matrix_i.append(0)
+        for b, m in enumerate(rel_attention_mask):
+            cur_len = len(m)
+            matrix = []
+            # 这里的 m.tolist() 会比之前要好，在计算上面
+            for from_mask in m.tolist():
+                matrix_i = []
+                for to_mask in m.tolist():
+                    # 每组实体只能看到自己的标记和句子中的文本
+                    if to_mask == 1 or from_mask == to_mask:
+                        matrix_i.append(1)
+                    else:
+                        matrix_i.append(0)
 
-                    matrix.append(matrix_i)
-                rel_attention_mask_matrix[b, :cur_len, :cur_len] = torch.tensor(matrix)
+                matrix.append(matrix_i)
+            rel_attention_mask_matrix[b, :cur_len, :cur_len] = torch.tensor(matrix)
 
-            rel_attention_mask = rel_attention_mask_matrix.clone()
-
-        else:
-            rel_attention_mask = nn.utils.rnn.pad_sequence(rel_attention_mask, batch_first=True, padding_value=0)
-            rel_attention_mask = (rel_attention_mask > 0).long()
+        rel_attention_mask = rel_attention_mask_matrix.clone()
 
         rel_input_ids = rel_input_ids.to(device)
         rel_positional_ids = rel_positional_ids.to(device)
@@ -301,7 +250,6 @@ class REModel(pl.LightningModule):
         triple_labels = self.get_triples_label(triples, device, ent_groups)
         if len(ent_groups) != 0:
             # 2. 重新计算 hidden state
-            # TODO: like PURE, add attention_mask
             plm_model = theta.plm_model_for_re if self.config.use_independent_plm else theta.plm_model
             plm_model = plm_model.cuda() # 不知道为什么是 CPU，可能是因为 debug mode
             outputs = plm_model(
@@ -487,3 +435,82 @@ class FeedForward(nn.Module):
             x = dropout(activation(layer(x)))
 
         return x
+
+
+class SpanModel(pl.LightningModule):
+    """【deprecated】用于NER的模型
+
+    用途：
+        1. 加载与命名实体相关的模型模块
+        2. 计算此部分的损失
+
+    """
+    def __init__(self, config, num_labels):
+        """初始化
+
+        Args:
+            config: 配置文件
+            num_labels: 标签的数量(BIO)
+            entity_type_num: 实体类型的标签数量
+        """
+        super().__init__()
+        self.config = config
+        self.num_labels = num_labels
+
+        self.dropout = nn.Dropout(config.model.hidden_dropout_prob)
+
+        if config.use_span == 'classifier':
+            self.classifier = nn.Linear(config.model.hidden_size, self.num_labels)
+        elif config.use_span == 'multi_classifier':
+            self.classifier = MultiNonLinearClassifier(config.model.hidden_size, self.num_labels)
+        else:
+            raise NotImplementedError(f"config.use_span={config.use_span} is not implemented!")
+
+    def forward(self, hidden_output, pos=None, labels=None):
+
+        hidden_output = self.dropout(hidden_output)
+        logits = self.classifier(hidden_output)
+
+        loss = None
+        bsz = logits.shape[0]
+        if labels is not None:
+            loss_fct = nn.CrossEntropyLoss(reduction='mean')
+            # Only keep active parts of the loss
+            if pos is not None:
+                labels = torch.cat([labels[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
+                labels = labels.view(-1)
+                new_logits = torch.cat([logits[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
+                new_logits = new_logits.view(-1, self.num_labels)
+            else:
+                new_logits = logits.view(-1, self.num_labels)
+                labels = labels.view(-1)
+
+            loss = loss_fct(new_logits, labels)
+
+        return logits, loss
+
+    def decode_entities(self, logits, pos=None):
+
+        if logits.shape[-1] == self.num_labels:
+            logits = torch.argmax(logits, dim=-1)
+
+        entities = []
+        bsz = logits.shape[0]
+        for b in range(bsz):
+            entity = []
+            # 1 表示 B，即实体的开始，2 表示 I，即实体的中间
+            start = False
+            sent_start, sent_end = pos[b,0], pos[b,1]
+            for i in range(sent_start, sent_end):
+                if logits[b, i] == 1:
+                    start = True
+                    entity.append([i, i+1])
+                elif logits[b, i] == 2 and start:
+                    entity[-1][1] = i+1
+                else:
+                    start = False
+
+            entities.append(entity)
+
+        return entities
+
