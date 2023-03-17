@@ -209,10 +209,12 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     else:
         ent_maps = torch.zeros((len(samples)), dtype=torch.long)
 
-    if config.use_ent_corres:
-        ent_corres = torch.stack([sample["ent_corres"] for sample in samples])
-    else:
-        ent_corres = torch.zeros((len(samples)), dtype=torch.long)
+    # if config.use_ent_corres:
+    #     ent_corres = torch.stack([sample["ent_corres"] for sample in samples])
+    # else:
+    #     ent_corres = torch.zeros((len(samples)), dtype=torch.long)
+
+    ent_corres = torch.zeros((len(samples)), dtype=torch.long)
 
 
     return {
