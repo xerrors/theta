@@ -77,16 +77,16 @@ class REModel(pl.LightningModule):
             ent_num, hidden_size = ent_hs.shape
 
             if self.config.use_entity_pair_filter == "cat_and_cls":
-                ent_hs_x = ent_hs.unsqueeze(1).repeat(1, ent_hs.shape[0], 1)    # (ent_num, ent_num, hidden_size)
-                ent_hs_y = ent_hs.unsqueeze(0).repeat(ent_hs.shape[0], 1, 1)    # (ent_num, ent_num, hidden_size)
+                ent_hs_x = ent_hs.unsqueeze(1).repeat(1, ent_num, 1)    # (ent_num, ent_num, hidden_size)
+                ent_hs_y = ent_hs.unsqueeze(0).repeat(ent_num, 1, 1)    # (ent_num, ent_num, hidden_size)
                 ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1).view(-1, hidden_size * 2)    # (ent_num, ent_num, hidden_size * 2)
                 ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)   # (ent_num * ent_num,)
 
             elif self.config.use_entity_pair_filter == "proj_then_cat":
                 ent_hs_x = self.sub_proj(ent_hs)
                 ent_hs_y = self.obj_proj(ent_hs)
-                ent_hs_x = ent_hs_x.unsqueeze(1).repeat(1, ent_hs.shape[0], 1)    # (ent_num, ent_num, hidden_size)
-                ent_hs_y = ent_hs_y.unsqueeze(0).repeat(ent_hs.shape[0], 1, 1)    # (ent_num, ent_num, hidden_size)
+                ent_hs_x = ent_hs_x.unsqueeze(1).repeat(1, ent_num, 1)    # (ent_num, ent_num, hidden_size)
+                ent_hs_y = ent_hs_y.unsqueeze(0).repeat(ent_num, 1, 1)    # (ent_num, ent_num, hidden_size)
                 ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1).view(-1, hidden_size * 2)    # (ent_num, ent_num, hidden_size * 2)
                 ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)   # (ent_num * ent_num,)
 
@@ -97,15 +97,15 @@ class REModel(pl.LightningModule):
                 ent_hs_pair = ent_hs_pair.view(-1, 1).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
 
             elif self.config.use_entity_pair_filter == "bilinear_proj":
-                ent_hs_x = ent_hs.unsqueeze(1).repeat(1, ent_hs.shape[0], 1).view(-1, hidden_size)
-                ent_hs_y = ent_hs.unsqueeze(0).repeat(ent_hs.shape[0], 1, 1).view(-1, hidden_size)
+                ent_hs_x = ent_hs.unsqueeze(1).repeat(1, ent_num, 1).view(-1, hidden_size)
+                ent_hs_y = ent_hs.unsqueeze(0).repeat(ent_num, 1, 1).view(-1, hidden_size)
                 ent_hs_pair = self.bilinear(ent_hs_x, ent_hs_y).squeeze(-1)
 
             elif self.config.use_entity_pair_filter == "bilinear":
                 ent_hs_x = self.sub_proj(ent_hs)
                 ent_hs_y = self.obj_proj(ent_hs)
-                ent_hs_x = ent_hs_x.unsqueeze(1).repeat(1, ent_hs.shape[0], 1).view(-1, hidden_size)
-                ent_hs_y = ent_hs_y.unsqueeze(0).repeat(ent_hs.shape[0], 1, 1).view(-1, hidden_size)
+                ent_hs_x = ent_hs_x.unsqueeze(1).repeat(1, ent_num, 1).view(-1, hidden_size)
+                ent_hs_y = ent_hs_y.unsqueeze(0).repeat(ent_num, 1, 1).view(-1, hidden_size)
                 ent_hs_pair = self.bilinear(ent_hs_x, ent_hs_y).squeeze(-1)
 
             logits.append(ent_hs_pair)
@@ -196,9 +196,9 @@ class REModel(pl.LightningModule):
 
             marker_mask = 1
             for ent_pair in draft_ent_groups:
-                sub_pos, obj_pos = ent_pair[:2]
+                sub_pos, obj_pos, score = ent_pair
 
-                if len(ids) + 3 <= max_len:
+                if len(ids) + 3 <= max_len and score > self.config.get("ent_pair_threshold", 0):
                     marker_mask += 1
                     sub_begin_tag_id = ent_ids[sub_pos[2]+1]
                     obj_begin_tag_id = ent_ids[obj_pos[2]+1]
