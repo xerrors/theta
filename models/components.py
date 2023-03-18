@@ -33,6 +33,12 @@ class REModel(pl.LightningModule):
         elif config.use_rel_cls == 'lmhead':
             self.lmhead = lmhead
 
+        # rel_embeddings
+        self.rel_embeddings = nn.Embedding(len(rel_ids), config.model.hidden_size)
+
+        # ent length embeddings
+        self.ent_len_embeddings = nn.Embedding(10, config.model.hidden_size)
+
         self.filter_entity_pair_net = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
 
         self.sub_proj = nn.Linear(config.model.hidden_size, config.model.hidden_size)
@@ -263,6 +269,11 @@ class REModel(pl.LightningModule):
             # 找到 mask 的 Hidden State
             mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
+
+            if self.config.use_tag_to_pred_rel:
+                sub_hidden_state = rel_stage_hs[mask_pos[0], mask_pos[1]-1]
+                obj_hidden_state = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+                rel_hidden_states = torch.cat([rel_hidden_states, sub_hidden_state, obj_hidden_state], dim=-1)
 
         assert len(ent_groups) == len(rel_hidden_states) == len(triple_labels)
         return ent_groups, rel_hidden_states, triple_labels, filter_loss
