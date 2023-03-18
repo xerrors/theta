@@ -5,6 +5,9 @@ import pytorch_lightning as pl
 from torchcrf import CRF
 import numpy as np
 
+from utils.funcs import cosine_ease_in_out_minmax
+from utils.optimizers import calc_num_training_steps
+
 class MultiNonLinearClassifier(nn.Module):
     def __init__(self, hidden_size, tag_size, dropout_rate=0.1):
         super(MultiNonLinearClassifier, self).__init__()
@@ -28,6 +31,7 @@ class REModel(pl.LightningModule):
         self.config = config
         self.rel_ids = rel_ids
         self.ent_ids = ent_ids
+
         if config.use_rel_cls == 'multi_classifier':
             self.classifier = MultiNonLinearClassifier(config.model.hidden_size, len(rel_ids))
         elif config.use_rel_cls == 'lmhead':
@@ -156,6 +160,9 @@ class REModel(pl.LightningModule):
         input_ids, _, pos, _, _, _ = batch
         bsz, seq_len = input_ids.shape
 
+        # 暂时使用 calc_num_training_steps 来反复计算，如果后面正式效果可行，再优化这部分的代码
+        ratio = cosine_ease_in_out_minmax(theta.global_step, calc_num_training_steps(theta) * 0.2)
+
         logits, filter_loss, map_dict = self.filter_entity_pair(hidden_state, entities, triples)
         logits = logits.sigmoid()
 
@@ -192,7 +199,7 @@ class REModel(pl.LightningModule):
             for ent_pair in draft_ent_groups:
                 sub_pos, obj_pos, score = ent_pair
 
-                if len(ids) + 3 <= max_len and score > self.config.get("ent_pair_threshold", 0):
+                if len(ids) + 3 <= max_len and score > self.config.get("ent_pair_threshold", 0) * ratio:
                     marker_mask += 1
                     sub_begin_tag_id = ent_ids[sub_pos[2]+1]
                     obj_begin_tag_id = ent_ids[obj_pos[2]+1]
@@ -264,6 +271,11 @@ class REModel(pl.LightningModule):
             mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
 
+            if self.config.use_ent_tag_pred_rel:
+                sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]-1]
+                obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+                rel_hidden_states += sub_tag_hs + obj_tag_hs
+
         assert len(ent_groups) == len(rel_hidden_states) == len(triple_labels)
         return ent_groups, rel_hidden_states, triple_labels, filter_loss
 
@@ -315,7 +327,7 @@ class NERModel(pl.LightningModule):
         if self.config.use_crf:
             self.crf = CRF(len(ent_ids), batch_first=True)
 
-        self.num_ent_type = len(ent_ids) // 2
+        self.num_ent_type = len(self.config.dataset.ents)
 
     def forward(self, hidden_output, pos=None, labels=None):
 
@@ -371,13 +383,8 @@ class NERModel(pl.LightningModule):
                 if logits[b, i] > 0 and logits[b, i] <= self.num_ent_type:
                     start = True
                     entity.append([i, i+1, logits[b, i].item()-1])
-                # 判断是否是 I 标签以及是否是连续的
+                # 判断是否是 I 标签
                 elif logits[b, i] > self.num_ent_type and start:
-                    # # 放松一点，只要是连续的就合并
-                    # if entity[-1][2] == logits[b, i] - 1 - self.num_ent_type:
-                    #     entity[-1][1] = i + 1
-                    # else:
-                    #     start = False
                     entity[-1][1] = i + 1 # 左闭右开
                 else:
                     start = False

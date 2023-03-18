@@ -36,6 +36,11 @@ use_independent_plm: False
 mask_token_position: "obj" # experiment result
 use_entity_pair_filter: "cat_and_cls"
 
+# TODO
+use_less_ner_tag: False
+use_ent_tag_pred_rel: False
+use_dynamic_rel_threshold: False
+
 use_two_stage: True # Set As True
 use_rel_mask: True # Set As True
 
