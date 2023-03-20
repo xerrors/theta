@@ -78,8 +78,14 @@ class Theta(pl.LightningModule):
         ents = config.dataset.ents
 
         rel_tokens = [f"[R{i}]" for i in range(len(rels))]
-        ent_tokens = ["[O]"] + [f"[B-{e}]" for e in ents] + [f"[I-{e}]" for e in ents]
         tag_tokens = ["[SS]", "[SE]", "[OS]", "[OE]", "[ES]", "[EE]"]
+        ent_tokens = ["[O]"] + [f"[B-{e}]" for e in ents]
+
+        # 是否需要针对命名实体识别使用这么多的标签
+        if self.config.use_less_ner_tag:
+            ent_tokens += ["[I]"]
+        else:
+            ent_tokens += [f"[I-{e}]" for e in ents]
 
         # 扩展词表
         special_tokens_dict = {'additional_special_tokens': rel_tokens + ent_tokens + tag_tokens}
@@ -100,23 +106,30 @@ class Theta(pl.LightningModule):
         ace_rel_map, ace_ent_map, tag_map = get_language_map_dict()
 
         # 下面的代码是有点丑陋，甚至于恶心的，但是也没有办法，先这么写着吧
+        # Rel
         ace_rel_ids = [self.tokenizer.encode(ace_rel_map[rel], add_special_tokens=False) for rel in rels]
         for i, rel_id in enumerate(self.rel_ids):
             word_embeddings[rel_id] = word_embeddings[ace_rel_ids[i]].clone().mean(dim=-2)
             if self.config.use_independent_plm:
                 word_embeddings_re[rel_id] = word_embeddings_re[ace_rel_ids[i]].clone().mean(dim=-2)
 
+        # Entity
         ace_ent_ids = [self.tokenizer.encode("outside", add_special_tokens=False)]
         for ent in ents:
             ace_ent_ids.append(self.tokenizer.encode("begin " + ace_ent_map[ent], add_special_tokens=False))
-        for ent in ents:
-            ace_ent_ids.append(self.tokenizer.encode("inside " + ace_ent_map[ent], add_special_tokens=False))
+
+        if self.config.use_less_ner_tag:
+            ace_ent_ids.append(self.tokenizer.encode("inside entity", add_special_tokens=False))
+        else:
+            for ent in ents:
+                ace_ent_ids.append(self.tokenizer.encode("inside " + ace_ent_map[ent], add_special_tokens=False))
 
         for i, ent_id in enumerate(self.ent_ids):
             word_embeddings[ent_id] = word_embeddings[ace_ent_ids[i]].clone().mean(dim=-2)
             if self.config.use_independent_plm:
                 word_embeddings_re[ent_id] = word_embeddings_re[ace_ent_ids[i]].clone().mean(dim=-2)
 
+        # Tag
         ace_tag_ids = [self.tokenizer.encode(tag_map[tag], add_special_tokens=False) for tag in tag_tokens]
         for i, tag_id in enumerate(self.tag_ids):
             word_embeddings[tag_id] = word_embeddings[ace_tag_ids[i]].clone().mean(dim=-2)
