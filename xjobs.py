@@ -92,7 +92,7 @@ for config in run_configs:
 for i, config in enumerate(combinations):
     config["tag"] = f"{config['tag']}"
     for key in index:
-        if config.get(key):
+        if config.get(key) is not None:
             config["tag"] += f"-{key}_{config[key]}"
 
     print(exec_main(config))
