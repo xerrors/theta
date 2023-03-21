@@ -99,7 +99,7 @@ class REModel(pl.LightningModule):
                 ent_hs_x = self.sub_proj(ent_hs)
                 ent_hs_y = self.obj_proj(ent_hs)
                 # torch.matmul(A, B) = A @ B
-                ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-1, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
+                ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-2, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
                 ent_hs_pair = ent_hs_pair.view(-1, 1).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
 
             elif self.config.use_entity_pair_filter == "bilinear_proj":
