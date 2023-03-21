@@ -34,7 +34,7 @@ use_rel_cls: "multi_classifier"
 use_independent_plm: False
 
 mask_token_position: "obj" # experiment result
-use_entity_pair_filter: "cat_and_cls"
+use_entity_pair_filter: "attention"
 
 # TODO
 use_less_ner_tag: False
