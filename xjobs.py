@@ -8,14 +8,26 @@ import utils
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
 
-index = ["use_ner"]
+index = ["use_entity_pair_filter"]
 run_config = dict(
     tag="zeta",
-    use_ner="multi_classifier",
-    use_rel_cls="multi_classifier",
-    use_entity_pair_filter=["bilinear", "cat_and_cls", "proj_then_cat", "attention"],
+    use_entity_pair_filter=["cat_and_cls", "proj_then_cat", "attention", "bilinear"],
 )
-run_configs = []
+run_configs = [
+    {
+        "tag": "zeta-less-ner-tag",
+        "use_less_ner_tag": True,
+    },
+    {
+        "tag": "zeta-with-ent-tag",
+        "use_ent_tag_pred_rel": True,
+    },
+    {
+        "tag": "zeta-dynamic-threshold",
+        "use_dynamic_rel_threshold": True,
+        "ent_pair_threshold": 0.5
+    },
+]
 
 def get_gpu_by_user_input():
 

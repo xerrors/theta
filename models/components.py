@@ -1,4 +1,5 @@
 import itertools
+import math
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
@@ -97,7 +98,8 @@ class REModel(pl.LightningModule):
             elif self.config.use_entity_pair_filter == "attention":
                 ent_hs_x = self.sub_proj(ent_hs)
                 ent_hs_y = self.obj_proj(ent_hs)
-                ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(0,1)) / (ent_hs_x.shape[0] ** 0.5)    # (ent_num, ent_num, hidden_size)
+                # torch.matmul(A, B) = A @ B
+                ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-1, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
                 ent_hs_pair = ent_hs_pair.view(-1, 1).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
 
             elif self.config.use_entity_pair_filter == "bilinear_proj":
@@ -167,7 +169,7 @@ class REModel(pl.LightningModule):
         bsz, seq_len = input_ids.shape
 
         # 暂时使用 calc_num_training_steps 来反复计算，如果后面正式效果可行，再优化这部分的代码
-        ratio = cosine_ease_in_out_minmax(theta.global_step, calc_num_training_steps(theta) * 0.2)
+        ratio = cosine_ease_in_out_minmax(theta.global_step, calc_num_training_steps(theta))
 
         logits, filter_loss, map_dict = self.filter_entity_pair(hidden_state, entities, triples)
         logits = logits.sigmoid()
