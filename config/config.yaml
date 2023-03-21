@@ -38,7 +38,7 @@ use_entity_pair_filter: "attention"
 
 # TODO
 use_less_ner_tag: False
-use_ent_tag_pred_rel: False
+use_ent_tag_pred_rel: True
 use_dynamic_rel_threshold: False
 ent_pair_threshold: 0
 

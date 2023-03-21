@@ -8,11 +8,12 @@ import utils
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
 
-index = ["ent_pair_threshold"]
+index = ["lr"]
 run_config = dict(
     tag="zeta",
-    use_dynamic_rel_threshold=True,
-    ent_pair_threshold=[0, 0.1, 0.3, 0.5],
+    lr=[1e-4, 5e-5, 3e-5, 1e-5, 5e-6],
+    seed=[7, 42, 2023]
+
 )
 run_configs = []
 
