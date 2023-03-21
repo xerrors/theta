@@ -8,11 +8,12 @@ import utils
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
 
-index = ["use_rel_cls", "mask_token_position"]
+index = ["lr"]
 run_config = dict(
     tag="zeta",
-    use_rel_cls=["lmhead", "multi_classifier"],
-    mask_token_position=["sub", "obj", "mid"]
+    lr=[1e-4, 5e-5, 3e-5, 1e-5, 5e-6],
+    seed=[7, 42, 2023]
+
 )
 run_configs = []
 
@@ -56,7 +57,7 @@ def exec_main(config):
     config["run_id"] = run_id
     config["fast_dev_run"] = args.fast_dev_run
     config["output"] = args.output
-    if not config.get("gpt") or config.get("gpt") not in ["0", "1", "2", "3"]:
+    if not config.get("gpu") or config.get("gpu") not in ["0", "1", "2", "3"]:
         config["gpu"] = GPU
 
     try:
@@ -71,13 +72,17 @@ def exec_main(config):
         return None
 
 
-GPU = get_gpu_by_user_input()
 
 parser = argparse.ArgumentParser(add_help=False)
-# 添加一个 --fast-dev-run 的 argsparser 配置
 parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
 parser.add_argument("--output", type=str, default="output", help="Output directory")
+parser.add_argument("--gpu", type=str, default="not specified")
 args, _ = parser.parse_known_args()
+
+if args.gpu == "not specified":
+    GPU = get_gpu_by_user_input()
+else:
+    GPU = args.gpu
 
 # 生成所有的组合
 combinations = get_all_combinations(run_config)
@@ -88,7 +93,7 @@ for config in run_configs:
 for i, config in enumerate(combinations):
     config["tag"] = f"{config['tag']}"
     for key in index:
-        if config.get(key):
+        if config.get(key) is not None:
             config["tag"] += f"-{key}_{config[key]}"
 
     print(exec_main(config))

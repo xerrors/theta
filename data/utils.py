@@ -156,7 +156,11 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                     ent_maps[ent_s+1:ent_e] = 2 # I
                 elif config.use_ner:
                     ent_maps[ent_s] = ner2id[ner.label] + 1
-                    ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
+
+                    if config.use_less_ner_tag:
+                        ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + 2
+                    else:
+                        ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
 
                 if ner.span not in added:
                     ner_total_len += ent_e - ent_s
@@ -209,10 +213,12 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     else:
         ent_maps = torch.zeros((len(samples)), dtype=torch.long)
 
-    if config.use_ent_corres:
-        ent_corres = torch.stack([sample["ent_corres"] for sample in samples])
-    else:
-        ent_corres = torch.zeros((len(samples)), dtype=torch.long)
+    # if config.use_ent_corres:
+    #     ent_corres = torch.stack([sample["ent_corres"] for sample in samples])
+    # else:
+    #     ent_corres = torch.zeros((len(samples)), dtype=torch.long)
+
+    ent_corres = torch.zeros((len(samples)), dtype=torch.long)
 
 
     return {
