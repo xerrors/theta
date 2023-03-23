@@ -151,16 +151,12 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 ent_e = end2idx[ner.span.end_sent]
                 # 实体边界识别 O B-0 B-1 B-2 B-3 B-4 B-5 B-6 I-0 I-1 I-2 I-3 I-4 I-5 I-6
                 #            0 1   2   3   4   5   6   7   8   9   10  11  12  13  14
-                if config.use_span:
-                    ent_maps[ent_s] = 1 # B
-                    ent_maps[ent_s+1:ent_e] = 2 # I
-                elif config.use_ner:
-                    ent_maps[ent_s] = ner2id[ner.label] + 1
+                ent_maps[ent_s] = ner2id[ner.label] + 1
 
-                    if config.use_less_ner_tag:
-                        ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + 2
-                    else:
-                        ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
+                if config.use_less_ner_tag:
+                    ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + 2
+                else:
+                    ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
 
                 if ner.span not in added:
                     ner_total_len += ent_e - ent_s
@@ -208,7 +204,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     triples = torch.stack([sample["triples"] for sample in samples])
     pos = torch.stack([sample["pos"] for sample in samples])
 
-    if config.use_span or config.use_ner:
+    if config.use_ner:
         ent_maps = torch.stack([sample["ent_maps"] for sample in samples])
     else:
         ent_maps = torch.zeros((len(samples)), dtype=torch.long)

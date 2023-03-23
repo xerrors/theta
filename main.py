@@ -8,8 +8,6 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import wandb
-from pytorch_lightning.plugins import DDPPlugin
-
 import utils
 from data.data_module import DataModule
 

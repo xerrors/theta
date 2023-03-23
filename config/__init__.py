@@ -105,9 +105,6 @@ class Config(SimpleConfig):
             self.output_dir = os.path.join(self.output, "debug", f"{self.start}-{self.tag}")
             os.makedirs(self.output_dir, exist_ok=True)
 
-        # 处理参数冲突
-        assert not (self.use_span and self.use_ner), "use_span 和 use_ner 不能同时为 True"
-
         # 快速验证模式
         if self.fast_dev_run:
             self.wandb = False
