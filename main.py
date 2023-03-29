@@ -31,16 +31,16 @@ def main(func_mode=False, **kwargs):
     theta = Theta(config, data)  # The model
 
     # Trainer callbacks
-    early_callback = pl.callbacks.EarlyStopping(
+    early_callback = pl.callbacks.EarlyStopping( # type: ignore
         monitor="val_f1", mode="max", patience=10, check_on_train_epoch_end=False)
-    model_checkpoint = pl.callbacks.ModelCheckpoint(
+    model_checkpoint = pl.callbacks.ModelCheckpoint( # type: ignore
         monitor="val_f1", mode="max",
         filename='f1={val_f1:.4f}-epoch={epoch}',
         dirpath=os.path.join(config.output_dir, "checkpoints"),
         auto_insert_metric_name=False,
         save_weights_only=True
     )
-    callbacks = [early_callback, model_checkpoint] if not config.fast_dev_run else []
+    callbacks = [early_callback, model_checkpoint]
 
     # gpu_count = torch.cuda.device_count()
 
@@ -73,10 +73,14 @@ def configure_logger(config):
     """ TensorBoardLogger (offline) or WandbLogger (Online) """
 
     if config.wandb:
-        logger = pl.loggers.WandbLogger(project="theta", name=config.tag, save_dir=config.output_dir)
+        logger = pl.loggers.WandbLogger( # type: ignore
+            project="theta",
+            name=config.tag,
+            save_dir=config.output_dir,
+            offline=config.offline)
         logger.log_hyperparams(config)
     else:
-        logger = pl.loggers.TensorBoardLogger(
+        logger = pl.loggers.TensorBoardLogger( # type: ignore
             name=config.tag,
             save_dir=os.path.join(config.output_dir, "tensorboard"))
 

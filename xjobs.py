@@ -8,14 +8,16 @@ import utils
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
 
-index = ["lr"]
+index = ["use_rel"]
 run_config = dict(
-    tag="zeta",
-    lr=[1e-4, 5e-5, 3e-5, 1e-5, 5e-6],
-    seed=[7, 42, 2023]
-
+    tag="gama-T",
+    use_rel=['mlp', 'lmhead'],
+    use_ner=['mlp', 'lmhead'],
 )
-run_configs = []
+run_configs = [{
+    "tag": "gama-T-base",
+    "use_graph": False,
+}]
 
 def get_gpu_by_user_input():
 
@@ -53,7 +55,8 @@ def get_all_combinations(run_config):
 
 
 def exec_main(config):
-
+    time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    print(utils.green("\n[XJOBS]"), time_str, "Running: {}".format(config["tag"]))
     config["run_id"] = run_id
     config["fast_dev_run"] = args.fast_dev_run
     config["output"] = args.output
@@ -64,11 +67,11 @@ def exec_main(config):
         return main(True, **config)
 
     except KeyboardInterrupt:
-        print(utils.red("[XJOBS]"), "KeyboardInterrupt: Interrupted by user!")
+        print(utils.red("\n[XJOBS]"), "KeyboardInterrupt: Interrupted by user!")
         return None
 
     except Exception as e:
-        print(utils.red("[XJOBS]"), "Running Error: {}, Continue...".format(e))
+        print(utils.red("\n[XJOBS]"), "Running Error: {}, Continue...".format(e))
         return None
 
 

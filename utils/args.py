@@ -13,14 +13,15 @@ def setup_parser(func_mode, **kwargs):
     # More: https://pytorch-lightning.readthedocs.io/en/stable/common/trainer.html
     trainer_parser = pl.Trainer.add_argparse_args(parser)
     trainer_parser._action_groups[1].title = "Trainer Args"  # pylint: disable=protected-access
-    parser = argparse.ArgumentParser(add_help=False, parents=[trainer_parser])
+    parser = argparse.ArgumentParser(add_help=False, parents=[trainer_parser]) # type: ignore
 
     parser.add_argument("--task", type=str, default="ere", choices=["ner", "rc", "ere"])
 
     # Basic arguments
     parser.add_argument("--gpu", type=str, default="not specified")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--wandb", action="store_true", default=False)
+    parser.add_argument("--offline", action="store_true", default=False)
     parser.add_argument("--output", type=str, default="output")
 
     parser.add_argument("--config", type=str, default="config/config.yaml")
@@ -50,7 +51,7 @@ def setup_parser(func_mode, **kwargs):
         for key, value in kwargs.items():
             if key in default_args and default_args[key] != value:
                 print(f"[{key}]: {default_args[key]} ==> ",
-                      utils.purple(value))
+                      utils.magenta(value))
                 default_args[key] = value
 
         return known_args

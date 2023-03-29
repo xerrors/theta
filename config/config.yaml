@@ -7,7 +7,7 @@ tag: default
 
 # INFO: Run
 num_worker: 12
-batch_size: 16 # can be overrided by model.yaml
+batch_size: 8 # can be overrided by model.yaml
 lr: 0.00005
 # decoder_lr: 0.00003
 # Achieved by gradient accumulation
@@ -21,30 +21,22 @@ max_epochs: 30
 # fast_dev_run: True
 
 # INFO: Model
-max_seq_len: 256
+max_seq_len: 500
 model_config: models/configs/bert.yaml # can not be modified in ext_config
 
 # INFO: Dataset
-context_window: 200  # make sure that context_window < max_seq_len
+context_window: 500  # make sure that context_window < max_seq_len
 dataset_config: datasets/ace2005/ace2005.yaml # can not be modified in ext_config
 
 # INFO: sub-task
-use_ner: "lmhead"
-use_rel_cls: "multi_classifier"
-use_independent_plm: False
+use_ner: "mlp"
+use_rel: "mlp"
+use_two_plm: False
 
-mask_token_position: "obj" # experiment result
-use_entity_pair_filter: "attention"
+# Graph
+use_graph: True
 
-# TODO
-use_less_ner_tag: False
-use_ent_tag_pred_rel: True
-use_dynamic_rel_threshold: False
+# 待验证
+use_ent_pred_rel: "tag"
+use_dynamic_rel_threshold: True
 ent_pair_threshold: 0
-
-use_two_stage: True # Set As True
-use_rel_mask: True # Set As True
-
-# use_ent_corres: "" # deprecated
-# use_rel_maps: "" # deprecated
-use_crf: False # deprecated

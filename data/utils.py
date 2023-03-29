@@ -44,6 +44,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
         data_range = (0, int(len(dataset)*0.9))
     elif split == 2:
         data_range = (int(len(dataset)*0.9), len(dataset))
+    else:
+        data_range = (0, len(dataset))
 
     # c means the index
     for c, doc in enumerate(dataset):
@@ -152,11 +154,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 # 实体边界识别 O B-0 B-1 B-2 B-3 B-4 B-5 B-6 I-0 I-1 I-2 I-3 I-4 I-5 I-6
                 #            0 1   2   3   4   5   6   7   8   9   10  11  12  13  14
                 ent_maps[ent_s] = ner2id[ner.label] + 1
-
-                if config.use_less_ner_tag:
-                    ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + 2
-                else:
-                    ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
+                ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
 
                 if ner.span not in added:
                     ner_total_len += ent_e - ent_s
@@ -208,11 +206,6 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
         ent_maps = torch.stack([sample["ent_maps"] for sample in samples])
     else:
         ent_maps = torch.zeros((len(samples)), dtype=torch.long)
-
-    # if config.use_ent_corres:
-    #     ent_corres = torch.stack([sample["ent_corres"] for sample in samples])
-    # else:
-    #     ent_corres = torch.zeros((len(samples)), dtype=torch.long)
 
     ent_corres = torch.zeros((len(samples)), dtype=torch.long)
 
