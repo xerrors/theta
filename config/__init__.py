@@ -31,6 +31,11 @@ class SimpleConfig(dict):
 class Config(SimpleConfig):
 
     def __init__(self, args, **kwargs):
+        """初始化配置
+
+        配置的优先级：
+            args < config < ext_config
+        """
 
         if args.test_from_ckpt:
             self.load_from_ckpt() # type: ignore
