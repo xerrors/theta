@@ -1,8 +1,9 @@
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import AutoTokenizer
-
+import os
 import utils
+import torch
 from data.data_structures import Dataset
 from data.utils import convert_dataset_to_samples
 
@@ -37,7 +38,14 @@ class DataModule(pl.LightningDataModule):
         """根据不同的任务类型以及数据集类型使用不同的数据加载方法"""
         print(utils.green(f"Loading {mode} data..."))
         if self.config.dataset.name in ["ace2005"]:
-            datasets = self.get_dataset_ace(mode)
+            os.makedirs(os.path.join(self.config.dataset.data_dir, ".cache"), exist_ok=True)
+            cache_path = os.path.join(self.config.dataset.data_dir, ".cache", f"{mode}.cache")
+            if os.path.exists(cache_path) and self.config.use_cache:
+                print(utils.green_background("Cache found!"), utils.green(f"Loading {mode} data from {cache_path}"))
+                datasets = torch.load(os.path.join(cache_path))
+            else:
+                datasets = self.get_dataset_ace(mode)
+                torch.save(datasets, os.path.join(cache_path))
         else:
             raise NotImplementedError(
                 f"Dataset {self.config.dataset.name} not implemented!")
@@ -57,16 +65,16 @@ class DataModule(pl.LightningDataModule):
             features["pos"],
             features["triples"],
             features["ent_maps"],
-            features["ent_corres"],
+            features["sent_mask"],
             )
 
         return dataset
 
     def train_dataloader(self):
-        return DataLoader(self.data_train, shuffle=True, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True)
+        return DataLoader(self.data_train, shuffle=True, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
 
     def val_dataloader(self):
-        return DataLoader(self.data_val, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True)
+        return DataLoader(self.data_val, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
 
     def test_dataloader(self):
-        return DataLoader(self.data_test, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True)
+        return DataLoader(self.data_test, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore

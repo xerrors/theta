@@ -13,6 +13,7 @@ datasets/unified
 # IDE
 .idea
 .vscode
+*.cache
 
 # tmp
 __pycache__

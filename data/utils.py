@@ -25,6 +25,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     max_len = 0
     max_ner = 0
 
+    debug_metrix = torch.zeros(7, 7, 6)
+
     ner2id = {name: idx for idx, name in enumerate(config.dataset.ents)}
     rel2id = {name: idx for idx, name in enumerate(config.dataset.rels)}
 
@@ -111,7 +113,6 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
 
             # 补全到 max_seq_len
             if len(tokenized_tokens) < max_seq_len - 2:
-
                 attention_mask = torch.zeros(max_seq_len, dtype=torch.long)
                 attention_mask[:len(tokenized_tokens)+2] = 1.0
 
@@ -119,7 +120,6 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 tokenized_tokens += [tokenizer.pad_token] * (max_seq_len - len(tokenized_tokens))
 
             else:
-
                 attention_mask = torch.ones(max_seq_len, dtype=torch.long)
                 tokenized_tokens = [tokenizer.cls_token] + tokenized_tokens[:max_seq_len-2] + [tokenizer.sep_token]
 
@@ -147,7 +147,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             ent_type = {}
             ner_total_len = 0  # 记录 ner 的总长度，用于判断是否有重叠
             added = []  # 记录已经添加过的 ner，因为在文档 323 中存在同一个实体标注了两次，两次是不同的类型，这里以第二个类型为准
-            ent_maps = torch.zeros(len(tokenized_tokens), dtype=torch.long) # 0 表示不是实体
+            ent_maps = torch.zeros(len(tokenized_tokens), dtype=torch.int16) # 0 表示不是实体
+            ent_maps_2d = torch.zeros(len(tokenized_tokens), len(tokenized_tokens), dtype=torch.int8) # 0 表示不是实体
             for ner in sent.ner:
                 ent_s = start2idx[ner.span.start_sent]
                 ent_e = end2idx[ner.span.end_sent]
@@ -155,6 +156,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 #            0 1   2   3   4   5   6   7   8   9   10  11  12  13  14
                 ent_maps[ent_s] = ner2id[ner.label] + 1
                 ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
+                ent_maps_2d[ent_s, ent_e] = ner2id[ner.label] + 1
 
                 if ner.span not in added:
                     ner_total_len += ent_e - ent_s
@@ -162,9 +164,6 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
 
                 ent_type[(ent_s, ent_e)] = ner2id[ner.label]
 
-            assert ner_total_len == (ent_maps != 0).sum(), 'NER overlap'
-
-            ent_corres = torch.zeros((max_seq_len, max_seq_len), dtype=torch.long)
             triples = set()
 
             for rel in sent.relations:
@@ -176,20 +175,21 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 sub_type = ent_type[(sub_s, sub_e)]
                 obj_type = ent_type[(obj_s, obj_e)]
                 triples.add((sub_s, sub_e, obj_s, obj_e, rel2id[rel.label], sub_type, obj_type))
-
-                ent_corres[sub_s:sub_e, obj_s:obj_e] = 1
+                debug_metrix[sub_type, obj_type, rel2id[rel.label]] = 1
 
             max_tripes_count = config.get("max_tripes_count", 30)
             assert len(triples) <= max_tripes_count, f"triples count {len(triples)} > {max_tripes_count}"
             # 补全到最大的三元组数量
             triples = list(triples) + [(-1, -1, -1, -1, -1, -1, -1)] * (max_tripes_count - len(triples))
+            sent_mask = torch.zeros_like(ent_maps)
+            sent_mask[sent_start:sent_end] = 1
 
             sample['input_ids'] = input_ids
-            sample['triples'] = torch.tensor(triples, dtype=torch.long)
+            sample['triples'] = torch.tensor(triples, dtype=torch.int16)
             sample['attention_mask'] = attention_mask
-            sample['pos'] = torch.tensor((sent_start, sent_end, sent.sentence_ix, sent.sentence_start), dtype=torch.long)
-            sample['ent_maps'] = ent_maps
-            sample['ent_corres'] = ent_corres
+            sample['pos'] = torch.tensor((sent_start, sent_end, sent.sentence_ix, sent.sentence_start), dtype=torch.int16)
+            sample['ent_maps'] = ent_maps if not config.use_spert else ent_maps_2d
+            sample['sent_mask'] = sent_mask
             samples.append(sample)
 
     avg_length = sum([len(sample['tokens']) for sample in samples]) / len(samples)
@@ -197,26 +197,20 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     print('Extracted %d samples from %d documents, with %d NER labels, %.3f avg input length, %d max length'%(len(samples), data_range[1]-data_range[0], num_ner, avg_length, max_length))
     print('Max Length: %d, max NER: %d'%(max_len, max_ner))
 
-    input_ids = torch.stack([sample["input_ids"] for sample in samples])
-    attention_mask = torch.stack([sample["attention_mask"] for sample in samples])
-    triples = torch.stack([sample["triples"] for sample in samples])
-    pos = torch.stack([sample["pos"] for sample in samples])
-
-    if config.use_ner:
-        ent_maps = torch.stack([sample["ent_maps"] for sample in samples])
-    else:
-        ent_maps = torch.zeros((len(samples)), dtype=torch.long)
-
-    ent_corres = torch.zeros((len(samples)), dtype=torch.long)
-
+    d_input_ids = torch.stack([sample["input_ids"] for sample in samples])
+    d_attention_mask = torch.stack([sample["attention_mask"] for sample in samples])
+    d_pos = torch.stack([sample["pos"] for sample in samples])
+    d_triples = torch.stack([sample["triples"] for sample in samples])
+    d_ent_maps = torch.stack([sample["ent_maps"] for sample in samples])
+    d_sent_mask = torch.stack([sample["sent_mask"] for sample in samples])
 
     return {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "pos": pos,
-        "triples": triples,
-        "ent_maps": ent_maps,
-        "ent_corres": ent_corres,
+        "input_ids": d_input_ids,
+        "attention_mask": d_attention_mask,
+        "pos": d_pos,
+        "triples": d_triples,
+        "ent_maps": d_ent_maps,
+        "sent_mask": d_sent_mask,
     }
 
 

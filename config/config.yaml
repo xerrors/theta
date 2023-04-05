@@ -16,7 +16,7 @@ global_batch_size: 16
 warmup: 0.1
 
 # INFO: Trainer
-max_epochs: 30
+max_epochs: 20
 # auto_lr: True
 # fast_dev_run: True
 
@@ -29,14 +29,28 @@ context_window: 500  # make sure that context_window < max_seq_len
 dataset_config: datasets/ace2005/ace2005.yaml # can not be modified in ext_config
 
 # INFO: sub-task
-use_ner: "mlp"
-use_rel: "mlp"
+use_ner: "lmhead"
+use_rel: "lmhead"
 use_two_plm: False
+use_cache: False
 
 # Graph
-use_graph: True
+use_graph: False
+use_graph_layers: 1
+
+# loss rate
+ner_rate: 1
+rel_rate: 1
+filter_rate: 1
 
 # 待验证
-use_ent_pred_rel: "tag"
+use_spert: False # defeat
+use_spert_opt1: "max" # defeat
+use_rel_cat: "none" # default none, pure
+use_rel_opt1: "new_tag" # new_tag ent_tag
+use_crf: False # 目前效果不太行
 use_dynamic_rel_threshold: True
 ent_pair_threshold: 0
+
+# set
+use_ent_pred_rel: "tag"

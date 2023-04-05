@@ -2,12 +2,14 @@ import math
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+from models.batch_filter import batch_filter
 from models.re_model import REModel
 from models.ner_model import NERModel
 from models.runtime_graph import RuntimeGraph
 from models.functions import getBertForMaskedLMClass
 
 from data.utils import get_language_map_dict
+from models.span_ner_model import SpanEntityModel
 from utils.metrics import f1_score
 from utils.optimizers import get_optimizer
 
@@ -57,7 +59,7 @@ class Theta(pl.LightningModule):
         ents = config.dataset.ents
 
         rel_tokens = [f"[R{i}]" for i in range(len(rels))]
-        tag_tokens = ["[SS]", "[SE]", "[OS]", "[OE]", "[ES]", "[EE]"]
+        tag_tokens = [f"[S-{e}]" for e in ents] + [f"[E-{e}]" for e in ents]
         ent_tokens = ["[O]"] + [f"[B-{e}]" for e in ents] + [f"[I-{e}]" for e in ents]
         special_tokens = ["[RC]"]
 
@@ -90,10 +92,8 @@ class Theta(pl.LightningModule):
 
             # Entity
             ace_ent_ids = [self.tokenizer.encode("outside", add_special_tokens=False)]
-            for ent in ents:
-                ace_ent_ids.append(self.tokenizer.encode("begin " + ace_ent_map[ent], add_special_tokens=False))
-
-            for ent in ents:
+            for (idx, ent) in enumerate(ents):
+                ace_ent_ids.insert(idx+1, self.tokenizer.encode("begin " + ace_ent_map[ent], add_special_tokens=False))
                 ace_ent_ids.append(self.tokenizer.encode("inside " + ace_ent_map[ent], add_special_tokens=False))
 
             for i, ent_id in enumerate(self.ent_ids):
@@ -102,19 +102,17 @@ class Theta(pl.LightningModule):
                     embeds_re[ent_id] = embeds_re[ace_ent_ids[i]].mean(dim=-2) # type: ignore
 
             # Tag
-            ace_tag_ids = [self.tokenizer.encode(tag_map[tag], add_special_tokens=False) for tag in tag_tokens]
+            ace_tag_ids = []
+            for (idx, ent) in enumerate(ents):
+                ace_tag_ids.insert(idx, self.tokenizer.encode("start " + ace_ent_map[ent], add_special_tokens=False))
+                ace_tag_ids.append(self.tokenizer.encode("end " + ace_ent_map[ent], add_special_tokens=False))
+
             for i, tag_id in enumerate(self.tag_ids):
                 embeds[tag_id] = embeds[ace_tag_ids[i]].mean(dim=-2) # type: ignore
                 if self.config.use_two_plm:
                     embeds_re[tag_id] = embeds_re[ace_tag_ids[i]].mean(dim=-2) # type: ignore
 
-            # Special
-            # TODO Task ID
-            # task_id = self.tokenizer.encode("[RC]", add_special_tokens=False)[0]
-
             assert (self.plm_model.get_input_embeddings().weight == embeds).all() # type: ignore
-            assert not self.config.use_two_plm or (
-                self.config.use_two_plm and (self.plm_model_for_re.get_input_embeddings().weight == word_embeddings).all()) # type: ignore
 
     def register_components(self):
         """ 用于构建除了预训练语言模型之外的所有模型组件
@@ -124,14 +122,15 @@ class Theta(pl.LightningModule):
 
         self.rel_model = REModel(self)
         self.ner_model = NERModel(self)
+        self.span_ner = SpanEntityModel(self)
 
-        self.graph = RuntimeGraph(self) if config.use_graph else None
+        self.graph = RuntimeGraph(self) if config.use_graph_layers > 0 else None
 
 
     def forward(self, batch, mode="train"):
 
         # Forward
-        input_ids, attention_mask, pos, triples, ent_maps, _ = batch
+        input_ids, attention_mask, pos, triples, ent_maps, sent_mask = batch
         outputs = self.plm_model(input_ids, attention_mask=attention_mask, output_hidden_states=True) # type: ignore
 
         # 一些参数
@@ -141,13 +140,18 @@ class Theta(pl.LightningModule):
         output["hidden_state"] = hidden_state
 
         # [REQUIRED] 命名实体识别损失
-        ner_logits, ner_loss = self.ner_model(hidden_state, pos=pos, labels=ent_maps, graph=self.graph)
+        if self.config.use_spert:
+            ner_logits, ner_loss = self.span_ner(hidden_state, labels=ent_maps, graph=self.graph, pos=pos)
+            entities = self.span_ner.decode_gold_entities(ent_maps,  pos=pos)
+
+        else:
+            ner_logits, ner_loss = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask)
+            entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
+
+        output["gold_entities"] = entities
         output["ner_logits"] = ner_logits
+        output["pos"] = pos
 
-        # [REQUIRED] 关系分类损失
-
-        # 如果是训练阶段，使用 gold triples 计算损失，如果不是，仅保存预测的 triples 用于评估
-        entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
         if sum([len(e) for e in entities]) > 0:
             rel_output = self.rel_model(
                                 theta=self,
@@ -167,7 +171,13 @@ class Theta(pl.LightningModule):
 
         # 如果是测试阶段，使用预测的 triples
         if mode != "train":
-            entities = self.ner_model.decode_entities(ner_logits, pos=pos) # pred entities
+            if self.config.use_spert:
+                entities = self.span_ner.decode_entities(ner_logits,  pos=pos)
+            elif self.config.ner_rate > 0:
+                entities = self.ner_model.decode_entities(ner_logits, pos=pos)
+
+            output["pred_entities"] = entities
+
             if sum([len(e) for e in entities]) > 0:
                 rel_output = self.rel_model(
                                     theta=self,
@@ -182,13 +192,13 @@ class Theta(pl.LightningModule):
 
         # 计算损失
         if mode == "train":
-            loss = ner_loss + rel_loss
+            loss = ner_loss * self.config.ner_rate + rel_loss * self.config.rel_rate
             self.log("ner_loss", ner_loss)
             self.log("rel_loss", rel_loss)
             self.log("filter_loss", filter_loss) # type: ignore
-            loss += filter_loss
+            loss += filter_loss * self.config.filter_rate
 
-            output["loss"] = loss
+            output["loss"] = loss / (self.config.ner_rate + self.config.rel_rate + self.config.filter_rate) * 3
 
         return output
 
@@ -206,10 +216,8 @@ class Theta(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
-        input_ids, _, pos, triples, ent_maps, _  = batch
         output = self(batch, mode="dev")
-
-        return self.eval_step_output(input_ids, pos, triples, ent_maps, output)
+        return self.eval_step_output(batch, output)
 
     def validation_epoch_end(self, outputs):
         f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
@@ -223,10 +231,8 @@ class Theta(pl.LightningModule):
         self.log_dict_values({'val_rel_f1': rel_f1, 'val_rel_p': rel_p, 'val_rel_r': rel_r})
 
     def test_step(self, batch, batch_idx):
-        input_ids, _, pos, triples, ent_maps, _  = batch
         output = self(batch, mode="test")
-
-        return self.eval_step_output(input_ids, pos, triples, ent_maps, output)
+        return self.eval_step_output(batch, output)
 
     def test_epoch_end(self, outputs):
         f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
@@ -238,11 +244,12 @@ class Theta(pl.LightningModule):
         self.log_dict_values({'test_ner_f1': ner_f1, 'test_ner_p': ner_p, 'test_ner_r': ner_r})
         self.log_dict_values({'test_rel_f1': rel_f1, 'test_rel_p': rel_p, 'test_rel_r': rel_r})
 
-    def eval_step_output(self, input_ids, pos, triples, ent_maps, output):
-        pred_entities = self.ner_model.decode_entities(output["ner_logits"], pos=pos)
-        gold_entities = self.ner_model.decode_entities(ent_maps, pos=pos)
-        pred_entities = self.get_span_set(input_ids, pred_entities)
-        gold_entities = self.get_span_set(input_ids, gold_entities)
+    def eval_step_output(self, batch, output):
+        # batch = batch_filter(batch, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id)
+        input_ids, _, pos, triples, ent_maps, sent_mask  = batch # type: ignore
+
+        pred_entities = self.get_span_set(input_ids, output["pred_entities"])
+        gold_entities = self.get_span_set(input_ids, output["gold_entities"])
 
         pred_triples, gold_triples = self.get_triple_set(input_ids, triples, output, "triples_pred")
         pred_triples_with_gold = self.get_triple_set(input_ids, triples, output, "triples_pred_with_gold", pred_only=True)

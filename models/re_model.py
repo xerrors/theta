@@ -38,6 +38,8 @@ class REModel(pl.LightningModule):
 
         self.grt_count = 0
         self.hit_count = 0
+        self.cur_epoch = 0
+        self.rel_type_num = len(self.config.dataset.ents)
 
 
     def convert_bij_to_index(self, bij, entities):
@@ -81,24 +83,28 @@ class REModel(pl.LightningModule):
         loss = torch.tensor(0.0, device=logits.device)
         if triples is not None:
             # sub_s, sub_e, obj_s, obj_e, rel_id, sub_type, obj_type
-            labels = torch.zeros_like(logits)
-            for b, triple in enumerate(triples):
-                for t in triple:
-                    if t[0] == -1:
-                        continue
-                    i = map_dict.get((b, t[0].item()))
-                    j = map_dict.get((b, t[2].item()))
-                    if i is None or j is None:
-                        continue
-                    index = self.convert_bij_to_index((b,i,j), entities)
-                    labels[index] = 1
+            labels = self.get_filter_label(entities, triples, logits, map_dict)
 
             loss_fct = nn.BCEWithLogitsLoss()
             loss = loss_fct(logits, labels)
 
         return logits, loss, map_dict
 
-    def get_triples_label(self, triples, device, ent_groups, mode):
+    def get_filter_label(self, entities, triples, logits, map_dict):
+        labels = torch.zeros_like(logits)
+        for b, triple in enumerate(triples):
+            for t in triple:
+                if t[0] == -1:
+                    continue
+                i = map_dict.get((b, t[0].item()))
+                j = map_dict.get((b, t[2].item()))
+                if i is None or j is None:
+                    continue
+                index = self.convert_bij_to_index((b,i,j), entities)
+                labels[index] = 1
+        return labels
+
+    def get_triples_label(self, triples, device, ent_groups, mode, epoch):
         """Get the labels of triples.
 
         Args:
@@ -131,6 +137,12 @@ class REModel(pl.LightningModule):
         hit_count = (triple_labels != 0).sum().item()
 
         if mode == "train":
+
+            if epoch != self.cur_epoch:
+                self.cur_epoch = epoch
+                self.grt_count = 0
+                self.hit_count = 0
+
             self.grt_count += gt_count
             self.hit_count += hit_count
 
@@ -176,33 +188,49 @@ class REModel(pl.LightningModule):
 
             # 先构建一个初始的实体组，然后按照置信度排序，能排多少是多少
             draft_ent_groups = []
+            filter_labels = self.get_filter_label(entities, triples, logits, map_dict)
             for sub_pos, obj_pos in itertools.permutations(entity, 2):
                 i = map_dict[(b, sub_pos[0])]
                 j = map_dict[(b, obj_pos[0])]
                 index = self.convert_bij_to_index((b, i, j), entities)
-                draft_ent_groups.append((sub_pos, obj_pos, logits[index].item()))
+                score = logits[index].item() if self.config.ner_rate > 0 else filter_labels[index].item()
+                draft_ent_groups.append((sub_pos, obj_pos, score))
             draft_ent_groups = sorted(draft_ent_groups, key=lambda a : a[-1], reverse=True)
 
             marker_mask = 1
             for ent_pair in draft_ent_groups:
-                sub_pos, obj_pos, score = ent_pair
+                (sub_s, sub_e, sub_t), (obj_s, obj_e, obj_t), score = ent_pair
 
-                if len(ids) + 3 <= max_len and score > cur_threshold:
+                if len(ids) + 5 <= max_len and score > cur_threshold:
                     marker_mask += 1
-                    sub_begin_tag_id = ent_ids[sub_pos[2]+1]
-                    obj_begin_tag_id = ent_ids[obj_pos[2]+1]
-                    ids += [sub_begin_tag_id, mask_token, obj_begin_tag_id]
+                    if self.config.use_rel_opt1 == "ent_tag":
+                        ss_tid = ent_ids[sub_t + 1]
+                        os_tid = ent_ids[obj_t + 1]
+                        se_tid = ent_ids[sub_t + self.rel_type_num + 1]
+                        oe_tid = ent_ids[obj_t + self.rel_type_num + 1]
+                    elif self.config.use_rel_opt1 == "new_tag":
+                        ss_tid = theta.tag_ids[sub_t]
+                        os_tid = theta.tag_ids[obj_t]
+                        se_tid = theta.tag_ids[sub_t + self.rel_type_num]
+                        oe_tid = theta.tag_ids[obj_t + self.rel_type_num]
+                    else:
+                        raise NotImplementedError(self.config.use_rel_opt1)
 
-                    sub_pos_id = sub_pos[0] - sent_s + 1
-                    obj_pos_id = obj_pos[0] - sent_s + 1
+                    ss_pid = sub_s - sent_s
+                    os_pid = obj_s - sent_s
+                    se_pid = sub_e - sent_s + 2
+                    oe_pid = obj_e - sent_s + 2
 
-                    # experiments show that this is better than sub_pos_id and (sub_pos_id + obj_pos_id) // 2
-                    mask_pos_id = obj_pos_id
+                    if self.config.use_rel_cat == 'pure':
+                        ids += [mask_token, ss_tid, os_tid, se_tid, oe_tid]
+                        pos_ids += [os_pid, ss_pid, os_pid, se_pid, oe_pid]
+                        masks += [marker_mask] * 5
+                    else:
+                        ids += [mask_token, ss_tid, os_tid]
+                        pos_ids += [os_pid, ss_pid, os_pid]
+                        masks += [marker_mask] * 3
 
-                    pos_ids += [sub_pos_id, mask_pos_id, obj_pos_id]
-                    masks += [marker_mask] * 3
-
-                    ent_groups.append([b, sub_pos[0], sub_pos[1], obj_pos[0], obj_pos[1], sub_pos[2], obj_pos[2]])
+                    ent_groups.append([b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t])
 
             rel_input_ids.append(torch.tensor(ids))
             rel_positional_ids.append(torch.tensor(pos_ids))
@@ -242,7 +270,7 @@ class REModel(pl.LightningModule):
         rel_hidden_states = []
 
         # 从 triples 中构建标签
-        triple_labels = self.get_triples_label(triples, device, ent_groups, mode=mode)
+        triple_labels = self.get_triples_label(triples, device, ent_groups, mode=mode, epoch=theta.current_epoch)
 
         if len(ent_groups) != 0:
             # 2. 重新计算 hidden state
@@ -260,13 +288,13 @@ class REModel(pl.LightningModule):
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
 
             if self.config.use_ent_pred_rel == "tag":
-                sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]-1]
-                obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+                sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+                obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
                 rel_hidden_states += sub_tag_hs + obj_tag_hs
 
             elif self.config.use_ent_pred_rel == "embed":
-                sub_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]-1]
-                obj_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
+                sub_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
+                obj_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
                 sub_hs = rel_stage_hs[mask_pos[0], sub_pos_ids]
                 obj_hs = rel_stage_hs[mask_pos[0], obj_pos_ids]
                 rel_hidden_states += sub_hs + obj_hs
@@ -283,7 +311,7 @@ class REModel(pl.LightningModule):
                         mode=mode)
 
         if mode == 'train' and self.grt_count != 0:
-                theta.log("info/hit_rate", self.hit_count / self.grt_count)
+            theta.log("info/hit_rate", self.hit_count / self.grt_count)
 
         ent_groups, hidden_output, triple_labels, filter_loss = output
 

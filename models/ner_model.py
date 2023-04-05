@@ -32,10 +32,13 @@ class NERModel(pl.LightningModule):
 
         self.num_ent_type = len(self.config.dataset.ents)
 
-    def forward(self, hidden_state, pos=None, labels=None, graph=None):
+    def forward(self, hidden_state, labels=None, graph=None, mask=None):
 
         if graph is not None:
             hidden_state = graph.query_ents(hidden_state)
+
+        if mask is None:
+            mask = torch.ones(hidden_state.shape[:2], device=hidden_state.device)
 
         if self.config.use_ner == "lmhead":
             assert self.lmhead is not None
@@ -44,36 +47,26 @@ class NERModel(pl.LightningModule):
         else:
             logits = self.classifier(hidden_state)
 
-        loss = None
+        loss = torch.tensor(0.0, device=logits.device)
         bsz = logits.shape[0]
 
-        if labels is not None and pos is not None:
+        if labels is not None:
 
             if self.config.use_crf:
-                mask = torch.zeros_like(labels, dtype=torch.bool)
-                for b in range(labels.shape[0]):
-                    mask[b, pos[b,0]:pos[b,1]] = 1
-                loss = -self.crf(logits, labels, mask=mask, reduction='mean')
+                loss = -self.crf(logits, labels, mask=mask, reduction='token_mean')
 
             else:
-                loss_fct = nn.CrossEntropyLoss(reduction='mean')
-                # Only keep active parts of the loss
-                if pos is not None:
-                    labels = torch.cat([labels[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
-                    labels = labels.view(-1)
-                    new_logits = torch.cat([logits[b, pos[b,0]:pos[b,1]] for b in range(bsz)], dim=0)
-                    new_logits = new_logits.view(-1, len(self.ent_ids))
-                else:
-                    new_logits = logits.view(-1, len(self.ent_ids))
-                    labels = labels.view(-1)
+                loss_fct = nn.CrossEntropyLoss(reduction='none')
+                new_logits = logits.view(-1, len(self.ent_ids))
+                new_labels = labels.view(-1).long()
 
-                loss = loss_fct(new_logits, labels)
+                loss = (loss_fct(new_logits, new_labels) * mask.view(-1)).sum() / mask.sum()
 
         return logits, loss
 
     def decode_entities(self, logits, pos=None):
         """return 左闭右开 [[(start, end, type), (...)],[],[(...)]]"""
-        if logits.shape[-1] == len(self.ent_ids):
+        if len(logits.shape) == 3 and logits.shape[-1] == len(self.ent_ids):
             if self.config.use_crf:
                 logits = torch.tensor(self.crf.decode(logits), device=logits.device)
             else:

@@ -8,16 +8,31 @@ import utils
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
 
-index = ["use_rel"]
+# index = ["use_spert_opt1", "use_two_plm"]
+# run_config = dict(
+#     tag="gama-span",
+#     use_cache=False,
+#     use_spert="mlp",
+#     use_two_plm=[False, True],
+#     use_spert_opt1=['max', 'mean', 'edge', 'sum'],
+# )
+
+index = ["use_two_plm", "use_rel_opt1"]
 run_config = dict(
-    tag="gama-T",
-    use_rel=['mlp', 'lmhead'],
-    use_ner=['mlp', 'lmhead'],
 )
-run_configs = [{
-    "tag": "gama-T-base",
-    "use_graph": False,
-}]
+run_configs = [
+    {
+        "tag": "alpha-base",
+    },{
+        "tag": "alpha-ner",
+        "rel_rate": 0.0,
+        "filter_rate": 0.0,
+    },{
+        "tag": "alpha-rel",
+        "ner_rate": 0.0,
+    }
+]
+
 
 def get_gpu_by_user_input():
 
@@ -73,7 +88,6 @@ def exec_main(config):
     except Exception as e:
         print(utils.red("\n[XJOBS]"), "Running Error: {}, Continue...".format(e))
         return None
-
 
 
 parser = argparse.ArgumentParser(add_help=False)
