@@ -8,13 +8,31 @@ import utils
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
 
-index = ["ent_pair_threshold"]
+# index = ["use_spert_opt1", "use_two_plm"]
+# run_config = dict(
+#     tag="gama-span",
+#     use_cache=False,
+#     use_spert="mlp",
+#     use_two_plm=[False, True],
+#     use_spert_opt1=['max', 'mean', 'edge', 'sum'],
+# )
+
+index = ["use_two_plm", "use_rel_opt1"]
 run_config = dict(
-    tag="zeta",
-    use_dynamic_rel_threshold=True,
-    ent_pair_threshold=[0, 0.1, 0.3, 0.5],
 )
-run_configs = []
+run_configs = [
+    {
+        "tag": "alpha-base",
+    },{
+        "tag": "alpha-ner",
+        "rel_rate": 0.0,
+        "filter_rate": 0.0,
+    },{
+        "tag": "alpha-rel",
+        "ner_rate": 0.0,
+    }
+]
+
 
 def get_gpu_by_user_input():
 
@@ -52,7 +70,8 @@ def get_all_combinations(run_config):
 
 
 def exec_main(config):
-
+    time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+    print(utils.green("\n[XJOBS]"), time_str, "Running: {}".format(config["tag"]))
     config["run_id"] = run_id
     config["fast_dev_run"] = args.fast_dev_run
     config["output"] = args.output
@@ -63,13 +82,12 @@ def exec_main(config):
         return main(True, **config)
 
     except KeyboardInterrupt:
-        print(utils.red("[XJOBS]"), "KeyboardInterrupt: Interrupted by user!")
+        print(utils.red("\n[XJOBS]"), "KeyboardInterrupt: Interrupted by user!")
         return None
 
     except Exception as e:
-        print(utils.red("[XJOBS]"), "Running Error: {}, Continue...".format(e))
+        print(utils.red("\n[XJOBS]"), "Running Error: {}, Continue...".format(e))
         return None
-
 
 
 parser = argparse.ArgumentParser(add_help=False)

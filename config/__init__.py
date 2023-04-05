@@ -38,7 +38,7 @@ class Config(SimpleConfig):
         """
 
         if args.test_from_ckpt:
-            self.load_from_ckpt()
+            self.load_from_ckpt() # type: ignore
             self.test_from_ckpt = args.test_from_ckpt
             self.last_test_time = time.strftime(
                 "%Y-%m-%d_%H-%M-%S", time.localtime())
@@ -69,7 +69,7 @@ class Config(SimpleConfig):
         self.save_config("config.pre.yaml")
 
         # 创建一个快捷方式，类型是文件夹，指向 output_dir，如果此快捷方式已经存在就删除重新创建快捷方式
-        link = os.path.join(self.output, "latest")
+        link = os.path.join(self.output, "latest") # type: ignore
         # if os.path.exists(link) and os.path.islink(link):
         #     os.remove(link)
 
@@ -87,8 +87,7 @@ class Config(SimpleConfig):
         parsed_config = SimpleConfig(config)
 
         if config_type == "model":
-            model_config = AutoConfig.from_pretrained(
-                parsed_config.model_name_or_path)
+            model_config = AutoConfig.from_pretrained(parsed_config.model_name_or_path) # type: ignore
             parsed_config.update(model_config.to_dict())
 
         return parsed_config
@@ -103,15 +102,12 @@ class Config(SimpleConfig):
 
         # 创建此次实验的基本信息，运行时间，输出路径
         self.start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-        self.output_dir = os.path.join(self.output, f"ouput-{self.start}-{self.tag}")
+        self.output_dir = os.path.join(str(self.output), f"ouput-{self.start}-{self.tag}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         if self.debug and not self.test_from_ckpt:
-            self.output_dir = os.path.join(self.output, "debug", f"{self.start}-{self.tag}")
+            self.output_dir = os.path.join(str(self.output), "debug", f"{self.start}-{self.tag}")
             os.makedirs(self.output_dir, exist_ok=True)
-
-        # 处理参数冲突
-        assert not (self.use_span and self.use_ner), "use_span 和 use_ner 不能同时为 True"
 
         # 快速验证模式
         if self.fast_dev_run:
@@ -163,7 +159,10 @@ class Config(SimpleConfig):
     def __replace_config_to_args(self):
 
         # 约定 batch_size
-        self.accumulate_grad_batches = self.global_batch_size // self.batch_size
+        if self.global_batch_size:
+            self.accumulate_grad_batches = self.global_batch_size // self.batch_size
+        else:
+            self.accumulate_grad_batches = 1
 
         for key, value in vars(self.args).items():
             if key in self.keys():
