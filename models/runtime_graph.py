@@ -99,8 +99,10 @@ class RuntimeGraph(pl.LightningModule):
 
         # 获取 Node 的 Embedding
         nodes = [node['embedding'] for node in self.G.nodes.values() if node['node_type'] == 'ent']
-        node_embeddings = torch.stack(nodes)
-        embeddings = torch.cat([embeddings, node_embeddings], dim=0)
+        if len(nodes) > 0:
+            node_embeddings = torch.stack(nodes)
+            embeddings = torch.cat([embeddings, node_embeddings], dim=0)
+
         return embeddings
 
     def get_relation(self):
