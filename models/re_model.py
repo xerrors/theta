@@ -329,7 +329,16 @@ class REModel(pl.LightningModule):
         else:
             logits = self.classifier(hidden_output)
 
-        triples_pred = [ent_groups[i] + [logits[i].argmax().item()] for i in range(len(ent_groups))]
+        triples_pred = []
+        relation_logits = logits.argmax(dim=-1)
+        for i in range(len(ent_groups)):
+            rel = relation_logits[i].item()
+            triples_pred.append(ent_groups[i] + [rel])
+            if relation_logits[i] > 0 and theta.graph:
+                rel_embeddings = hidden_output[i].detach().clone()
+                theta.graph.add_edge(sub=ent_groups[i][0], obj=ent_groups[i][1], rel_type=rel-1, embedding=rel_embeddings)
+
+        # triples_pred = [ent_groups[i] + [rel] for i in range(len(ent_groups))]
 
         rel_loss = torch.tensor(0.0).to(logits.device)
         if triple_labels is not None and return_loss:

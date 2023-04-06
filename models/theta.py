@@ -39,6 +39,8 @@ class Theta(pl.LightningModule):
         self.rel_num = len(config.dataset.rels)
         self.ent_num = len(config.dataset.ents)
         self.na_idx = data.rel2id.get(config.dataset.na_label, None)
+        self.cur_doc_id = 0
+        self.cur_mode = 'train'
 
         # 模型评估
         self.best_f1 = 0
@@ -147,6 +149,19 @@ class Theta(pl.LightningModule):
         else:
             ner_logits, ner_loss = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask)
             entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
+
+        # add entities to graph
+        if self.graph is not None:
+            for b, entity in enumerate(entities):
+                cur_doc_id = pos[b][4]
+                if self.cur_doc_id != cur_doc_id or self.cur_mode != mode:
+                    self.cur_doc_id = cur_doc_id
+                    self.cur_mode = mode
+                    self.graph.reset()
+
+                for e in entity:
+                    embedding = hidden_state[b, e[0]:e[1]].mean(dim=0).detach().clone()  # or max
+                    self.graph.add_node(name="ent", embedding=embedding, ent_type=e[2], node_type='entity')
 
         output["gold_entities"] = entities
         output["ner_logits"] = ner_logits

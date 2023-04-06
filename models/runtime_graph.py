@@ -71,21 +71,29 @@ class RuntimeGraph(pl.LightningModule):
         out = self.rel_attn(x, e, e)
         return out
 
-    def add_nodes(self, **kwargs):
+    def add_node(self, **kwargs):
         '''Add a node to the graph.
 
         Args:
             name: str, the name of the node.
             embedding: torch.Tensor, the embedding of the node.
-            entity_type: int, the type of the node.
-            node_type: str, the type of the node. 'ent' or 'rel'.
+            ent_type: int, the type of the node.
+            node_type: str, the type of the node. 'entity' or 'relation'.
         '''
 
         node_id = self.__len__()
         self.G.add_node(node_id, **kwargs)
         return node_id
 
-    def add_edges(self, sub, obj, **kwargs):
+    def add_edge(self, sub, obj, **kwargs):
+        """Add a edge
+
+        Args:
+            sub: subject
+            obj: object
+            rel: rel type
+            embedding: embedding
+        """
         edge_id = len(self.G.edges)
         self.G.add_edge(sub, obj, edge_id=edge_id, **kwargs)
         return edge_id
@@ -97,8 +105,8 @@ class RuntimeGraph(pl.LightningModule):
         ent_idx = torch.arange(len(self.ent_ids), device=self.device)
         embeddings = self._ent(ent_idx)
 
-        # 获取 Node 的 Embedding
-        nodes = [node['embedding'] for node in self.G.nodes.values() if node['node_type'] == 'ent']
+        # 获取 Node 的 Embedding # BUG 目前存在空节点的情况
+        nodes = [node['embedding'] for node in self.G.nodes.values() if node.get('node_type') == 'entity']
         if len(nodes) > 0:
             node_embeddings = torch.stack(nodes)
             embeddings = torch.cat([embeddings, node_embeddings], dim=0)
@@ -108,6 +116,13 @@ class RuntimeGraph(pl.LightningModule):
     def get_relation(self):
         rel_idx = torch.arange(len(self.rel_ids), device=self.device)
         embeddings = self._rel(rel_idx)
+
+        # 获取 Edge 的 Embedding
+        edges = [edge['embedding'] for edge in self.G.edges.values() if edge.get('edge_type') == 'relation']
+        if len(edges) > 0:
+            edge_embeddings = torch.stack(edges)
+            embeddings = torch.cat([embeddings, edge_embeddings], dim=0)
+
         return embeddings
 
     def aggregate(self, x):
@@ -121,6 +136,10 @@ class RuntimeGraph(pl.LightningModule):
     def readout(self, x):
         '''Readout Function, also known as Graph Output Function'''
         pass
+
+    def reset(self):
+        """删除所有节点，所有边"""
+        self.G = nx.DiGraph()
 
     def __len__(self):
         return len(self.G.nodes)
@@ -153,7 +172,6 @@ class GAT(nn.Module):
         x = F.dropout(x, self.dropout, training=self.training)
         x = F.elu(self.out_att(x, adj))
         return F.log_softmax(x, dim=1)
-
 
 
 class GraphAttentionLayer(nn.Module):

@@ -22,15 +22,21 @@ run_config = dict(
 )
 run_configs = [
     {
-        "tag": "alpha-base",
-    },{
-        "tag": "alpha-ner",
-        "rel_rate": 0.0,
-        "filter_rate": 0.0,
-    },{
-        "tag": "alpha-rel",
-        "ner_rate": 0.0,
-    }
+        "tag": "alpha-G0",
+        "use_graph_layers": 0,
+    },
+    {
+        "tag": "alpha-G1",
+        "use_graph_layers": 1,
+    },
+    {
+        "tag": "alpha-G2",
+        "use_graph_layers": 2,
+    },
+    {
+        "tag": "alpha-G3",
+        "use_graph_layers": 3,
+    },
 ]
 
 

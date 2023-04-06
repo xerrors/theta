@@ -7,7 +7,7 @@ tag: default
 
 # INFO: Run
 num_worker: 12
-batch_size: 8 # can be overrided by model.yaml
+batch_size: 1 # can be overrided by model.yaml
 lr: 0.00005
 # decoder_lr: 0.00003
 # Achieved by gradient accumulation
@@ -35,7 +35,6 @@ use_two_plm: False
 use_cache: True
 
 # Graph
-use_graph: False
 use_graph_layers: 1
 
 # loss rate
