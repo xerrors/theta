@@ -31,78 +31,10 @@ class REModel(pl.LightningModule):
         else:
             self.classifier = MultiNonLinearClassifier(config.model.hidden_size, len(self.rel_ids))
 
-        self.filter_entity_pair_net = MultiNonLinearClassifier(config.model.hidden_size * 2, 1)
-
-        self.sub_proj = nn.Linear(config.model.hidden_size, config.model.hidden_size)
-        self.obj_proj = nn.Linear(config.model.hidden_size, config.model.hidden_size)
-
         self.grt_count = 0
         self.hit_count = 0
         self.cur_epoch = 0
         self.rel_type_num = len(self.config.dataset.ents)
-
-
-    def convert_bij_to_index(self, bij, entities):
-        """找到 batch i 中的第 i 个实体和第 j 个实体在 logits 里面的位置
-        因为 logits 是将不同batch 的不同大小的实体对应表展开之后的，所以需要这样一个映射函数
-        """
-        batch_num = [len(e) for e in entities]
-        batch_sqrt = [len(e) * len(e) for e in entities]
-        batch_start = [0] + list(itertools.accumulate(batch_sqrt))[:-1]
-
-        b, i, j = bij
-        index = batch_start[b] + i * batch_num[b] + j
-
-        return index
-
-    def filter_entity_pair(self, hidden_state, entities, triples=None):
-
-        logits = []
-        map_dict = {}
-
-        for i in range(len(entities)):
-            if len(entities[i]) == 0: continue
-
-            # 记录实体 e 在此 batch i 的所有实体中的位置，后面需要用到表格索引的
-            for j, e in enumerate(entities[i]):
-                map_dict[(i, e[0])] = j
-
-            ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
-            ent_num, hidden_size = ent_hs.shape
-
-            ent_hs_x = self.sub_proj(ent_hs)
-            ent_hs_y = self.obj_proj(ent_hs)
-            # torch.matmul(A, B) = A @ B
-            ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-2, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
-            ent_hs_pair = ent_hs_pair.view(-1, 1).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
-
-            logits.append(ent_hs_pair)
-
-        logits = torch.cat(logits, dim=0)    # (batch_size * ent_num * ent_num,)
-
-        loss = torch.tensor(0.0, device=logits.device)
-        if triples is not None:
-            # sub_s, sub_e, obj_s, obj_e, rel_id, sub_type, obj_type
-            labels = self.get_filter_label(entities, triples, logits, map_dict)
-
-            loss_fct = nn.BCEWithLogitsLoss()
-            loss = loss_fct(logits, labels)
-
-        return logits, loss, map_dict
-
-    def get_filter_label(self, entities, triples, logits, map_dict):
-        labels = torch.zeros_like(logits)
-        for b, triple in enumerate(triples):
-            for t in triple:
-                if t[0] == -1:
-                    continue
-                i = map_dict.get((b, t[0].item()))
-                j = map_dict.get((b, t[2].item()))
-                if i is None or j is None:
-                    continue
-                index = self.convert_bij_to_index((b,i,j), entities)
-                labels[index] = 1
-        return labels
 
     def get_triples_label(self, triples, device, ent_groups, mode, epoch):
         """Get the labels of triples.
@@ -156,14 +88,20 @@ class REModel(pl.LightningModule):
         input_ids, _, pos, triples, _, _ = batch
         bsz, seq_len = input_ids.shape
 
+        is_train_thres = self.config.ent_pair_threshold and self.config.use_thres_train and mode == 'train'
+        is_val_thres = self.config.ent_pair_threshold and self.config.use_thres_val and mode != 'train'
+
+        # 如果启用 use_thres_train，则训练阶段实际上是使用的是所有的有关系的实体对
+        # 如果启用 use_thres_val，则验证阶段使用的都是置信度高的实体对
+
         # 暂时使用 calc_num_training_steps 来反复计算，如果后面正式效果可行，再优化这部分的代码
-        if self.config.ent_pair_threshold:
-            ratio = cosine_ease_in_out_minmax(theta.global_step, calc_num_training_steps(theta))
+        if is_train_thres or is_val_thres:
+            ratio = cosine_ease_in_out_minmax(theta.global_step, calc_num_training_steps(theta) * 1)
             cur_threshold = self.config.ent_pair_threshold * ratio
         else:
-            cur_threshold = 0
+            cur_threshold = -1
 
-        logits, filter_loss, map_dict = self.filter_entity_pair(hidden_state, entities, triples)
+        logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
         logits = logits.sigmoid()
 
         max_len= 512
@@ -177,6 +115,10 @@ class REModel(pl.LightningModule):
         pad_token = theta.tokenizer.pad_token_id
         mask_token = theta.tokenizer.mask_token_id
 
+        # 训练的时候使用真实标签来训练，测试的时候使用预测标签来训练
+        if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
+            logits = theta.filter.get_filter_label(entities, triples, logits, map_dict)
+
         for b, entity in enumerate(entities):
 
             sent_s, sent_e = pos[b, 0], pos[b, 1]
@@ -187,48 +129,26 @@ class REModel(pl.LightningModule):
             masks = [1 for b in range(sent_len+2)]
 
             # 先构建一个初始的实体组，然后按照置信度排序，能排多少是多少
-            draft_ent_groups = []
-            filter_labels = self.get_filter_label(entities, triples, logits, map_dict)
-            for sub_pos, obj_pos in itertools.permutations(entity, 2):
-                i = map_dict[(b, sub_pos[0])]
-                j = map_dict[(b, obj_pos[0])]
-                index = self.convert_bij_to_index((b, i, j), entities)
-                score = logits[index].item() if self.config.ner_rate > 0 else filter_labels[index].item()
-                draft_ent_groups.append((sub_pos, obj_pos, score))
-            draft_ent_groups = sorted(draft_ent_groups, key=lambda a : a[-1], reverse=True)
+            draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
 
             marker_mask = 1
             for ent_pair in draft_ent_groups:
                 (sub_s, sub_e, sub_t), (obj_s, obj_e, obj_t), score = ent_pair
 
-                if len(ids) + 5 <= max_len and score > cur_threshold:
+                if len(ids) + 3 <= max_len and score > cur_threshold:  # 当设置 filter_rate 为 0 时，仅包含正确的实体对
                     marker_mask += 1
-                    if self.config.use_rel_opt1 == "ent_tag":
-                        ss_tid = ent_ids[sub_t + 1]
-                        os_tid = ent_ids[obj_t + 1]
-                        se_tid = ent_ids[sub_t + self.rel_type_num + 1]
-                        oe_tid = ent_ids[obj_t + self.rel_type_num + 1]
-                    elif self.config.use_rel_opt1 == "new_tag":
-                        ss_tid = theta.tag_ids[sub_t]
-                        os_tid = theta.tag_ids[obj_t]
-                        se_tid = theta.tag_ids[sub_t + self.rel_type_num]
-                        oe_tid = theta.tag_ids[obj_t + self.rel_type_num]
-                    else:
-                        raise NotImplementedError(self.config.use_rel_opt1)
-
+                    ss_tid = theta.tag_ids[sub_t]
+                    os_tid = theta.tag_ids[obj_t]
+                    se_tid = theta.tag_ids[sub_t + self.rel_type_num]
+                    oe_tid = theta.tag_ids[obj_t + self.rel_type_num]
                     ss_pid = sub_s - sent_s
                     os_pid = obj_s - sent_s
                     se_pid = sub_e - sent_s + 2
                     oe_pid = obj_e - sent_s + 2
 
-                    if self.config.use_rel_cat == 'pure':
-                        ids += [mask_token, ss_tid, os_tid, se_tid, oe_tid]
-                        pos_ids += [os_pid, ss_pid, os_pid, se_pid, oe_pid]
-                        masks += [marker_mask] * 5
-                    else:
-                        ids += [mask_token, ss_tid, os_tid]
-                        pos_ids += [os_pid, ss_pid, os_pid]
-                        masks += [marker_mask] * 3
+                    ids += [mask_token, ss_tid, os_tid]
+                    pos_ids += [os_pid, ss_pid, os_pid]
+                    masks += [marker_mask] * 3
 
                     ent_groups.append([b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t])
 
@@ -302,13 +222,149 @@ class REModel(pl.LightningModule):
         assert len(ent_groups) == len(rel_hidden_states) == len(triple_labels)
         return ent_groups, rel_hidden_states, triple_labels, filter_loss
 
+    # def prepare_one_sent(self, theta, batch, hidden_state, entities, mode):
+
+    #     ent_ids = theta.ent_ids
+    #     device = hidden_state.device
+    #     input_ids, _, pos, triples, _, _ = batch
+    #     bsz, seq_len = input_ids.shape
+
+    #     ent_groups = []
+    #     rel_hidden_states = []
+
+    #     cls_token = theta.tokenizer.cls_token_id
+    #     sep_token = theta.tokenizer.sep_token_id
+    #     pad_token = theta.tokenizer.pad_token_id
+    #     mask_token = theta.tokenizer.mask_token_id
+
+    #     # 先构建一个初始的实体组，然后按照置信度排序，能排多少是多少
+    #     logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
+    #     logits = logits.sigmoid()
+
+    #     if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
+    #         logits = theta.filter.get_filter_label(entities, triples, logits, map_dict)
+
+    #     plm_model = theta.plm_model_for_re if self.config.use_two_plm else theta.plm_model
+
+    #     batches = []
+    #     for b, entity in enumerate(entities):
+
+    #         sent_s, sent_e = pos[b, 0], pos[b, 1]
+    #         sent_len = sent_e - sent_s
+
+    #         ids = [cls_token] + input_ids[b, sent_s:sent_e].tolist() + [sep_token]
+    #         pos_ids = [b for b in range(sent_len+2)]
+    #         masks = [1 for b in range(sent_len+2)]
+
+    #         marker_mask = 1
+    #         draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
+    #         for i, ent_pair in enumerate(draft_ent_groups):
+    #             (sub_s, sub_e, sub_t), (obj_s, obj_e, obj_t), score = ent_pair
+
+    #             ss_tid = theta.tag_ids[sub_t]
+    #             os_tid = theta.tag_ids[obj_t]
+    #             ss_pid = sub_s - sent_s
+    #             os_pid = obj_s - sent_s
+
+    #             if len(ids) + 3 > 512:
+    #                 batches.append((ids, pos_ids, masks))
+    #                 if len(batches) == 4:
+    #                     mask_hs = self.calc_mask_hs(theta, plm_model, batches) # copilot NewBee
+    #                     rel_hidden_states = torch.cat([rel_hidden_states, mask_hs], dim=0) if len(rel_hidden_states) > 0 else mask_hs
+    #                     batches = []
+
+    #                 ids = [cls_token] + input_ids[b, sent_s:sent_e].tolist() + [sep_token]
+    #                 pos_ids = [b for b in range(sent_len+2)]
+    #                 masks = [1 for b in range(sent_len+2)]
+    #                 marker_mask = 1
+
+    #             marker_mask += 1
+    #             ids += [mask_token, ss_tid, os_tid]
+    #             pos_ids += [os_pid, ss_pid, os_pid]
+    #             masks += [marker_mask] * 3
+
+    #             if i == len(draft_ent_groups) - 1:
+    #                 batches.append((ids, pos_ids, masks))
+
+    #             ent_g = [b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t]
+    #             ent_groups.append(ent_g)
+
+    #     if len(batches) != 0:
+    #         mask_hs = self.calc_mask_hs(theta, plm_model, batches)
+    #         rel_hidden_states = torch.cat([rel_hidden_states, mask_hs], dim=0) if len(rel_hidden_states) > 0 else mask_hs # type: ignore
+
+    #     # 从 triples 中构建标签
+    #     triple_labels = self.get_triples_label(triples, device, ent_groups, mode=mode, epoch=theta.current_epoch)
+
+    #     assert len(ent_groups) == len(rel_hidden_states) == len(triple_labels)
+    #     return ent_groups, rel_hidden_states, triple_labels, filter_loss
+
+
+    # def calc_mask_hs(self, theta, plm_model, batches):
+    #     max_len = max([len(b[0]) for b in batches])
+    #     bid, bpos, bmasks = [], [], []
+    #     rel_attention_mask_matrix = torch.zeros([len(batches), max_len, max_len])
+    #     for b, (b_ids, b_pos_ids, b_masks) in enumerate(batches):
+    #         b_ids += [theta.tokenizer.pad_token_id] * (max_len - len(b_ids))
+    #         b_pos_ids += [0] * (max_len - len(b_pos_ids))
+    #         cur_len = len(b_masks)
+    #         matrix = []
+    #         # 这里的 m.tolist() 会比之前要好，在计算上面
+    #         for from_mask in b_masks:
+    #             matrix_i = []
+    #             for to_mask in b_masks:
+    #                 # 每组实体只能看到自己的标记和句子中的文本
+    #                 if to_mask == 1 or from_mask == to_mask:
+    #                     matrix_i.append(1)
+    #                 else:
+    #                     matrix_i.append(0)
+
+    #             matrix.append(matrix_i)
+    #         rel_attention_mask_matrix[b, :cur_len, :cur_len] = torch.tensor(matrix)
+
+    #         bid.append(b_ids)
+    #         bpos.append(b_pos_ids)
+    #         bmasks.append(b_masks)
+
+    #     bid = torch.tensor(bid).to(theta.device)
+    #     bpos = torch.tensor(bpos).to(theta.device)
+    #     rel_attention_mask_matrix = rel_attention_mask_matrix.to(theta.device)
+    #     # bmasks = torch.tensor(bmasks).to(theta.device)
+
+    #     outputs = plm_model(
+    #                     bid,
+    #                     attention_mask=rel_attention_mask_matrix,
+    #                     position_ids=bpos,
+    #                     output_hidden_states=True)
+
+    #     rel_stage_hs = outputs.hidden_states[-1]
+    #     mask_pos = torch.where(bid == theta.tokenizer.mask_token_id)
+    #     mask_hs = rel_stage_hs[mask_pos[0], mask_pos[1]]
+    #     return mask_hs
+
+
     def forward(self, theta, batch, hidden_state, entities, return_loss, mode):
+
+        # if self.config.use_rel_opt1 == "filter":
+        #     prepare = self.prepare
+        # elif self.config.use_rel_opt1 == "batch":
+        #     prepare = self.prepare_one_sent
+        # else:
+        #     raise NotImplementedError("use_rel_opt1: {} not implemented".format(self.config.use_rel_opt1))
+
+        # output = prepare(
+        #             theta=theta,
+        #             batch=batch,
+        #             hidden_state=hidden_state,
+        #             entities=entities,
+        #             mode=mode)
+
         output = self.prepare(
-                        theta=theta,
-                        batch=batch,
-                        hidden_state=hidden_state,
-                        entities=entities,
-                        mode=mode)
+                    theta=theta,
+                    batch=batch,
+                    hidden_state=hidden_state,
+                    entities=entities,
+                    mode=mode)
 
         if mode == 'train' and self.grt_count != 0:
             theta.log("info/hit_rate", self.hit_count / self.grt_count)

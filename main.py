@@ -66,7 +66,19 @@ def main(func_mode=False, **kwargs):
     trainer.test(theta, datamodule=data)
 
     wandb.finish()
-    return theta.best_f1, theta.test_f1
+    return {
+        "best_model_path": model_checkpoint.best_model_path,
+        "bets_f1": theta.best_f1,
+        "test_f1": theta.test_f1,
+        "test_p": theta.test_p,
+        "test_r": theta.test_r,
+        "ner_f1": theta.ner_f1,
+        "ner_p": theta.ner_p,
+        "ner_r": theta.ner_r,
+        "rel_f1": theta.rel_f1,
+        "rel_p": theta.rel_p,
+        "rel_r": theta.rel_r,
+    }
 
 
 def configure_logger(config):

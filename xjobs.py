@@ -1,42 +1,38 @@
 import os
 import argparse
+from pprint import pprint
+import random
+
+import wandb
 from main import main
 import time
 import utils
+from prettytable import PrettyTable
 
 # 根据 run_config 生成所有的组合
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
-
-# index = ["use_spert_opt1", "use_two_plm"]
-# run_config = dict(
-#     tag="gama-span",
-#     use_cache=False,
-#     use_spert="mlp",
-#     use_two_plm=[False, True],
-#     use_spert_opt1=['max', 'mean', 'edge', 'sum'],
-# )
-
-index = ["use_two_plm", "use_rel_opt1"]
+index = {
+    "use_graph_layers": "G",
+    "use_two_plm": "Two-",
+    "use_rel_opt1": "F-", # filter, batch
+    "use_gold_ent_val": "GoldEnt",
+    "use_gold_filter_val": "GoldFilter",
+    "use_filter_hard": "Hard",
+    "use_thres_train": "ThresT",
+    "use_thres_val": "ThresV",
+    "max_epochs": "E",
+}
 run_config = dict(
+    tag="Eta",
+    use_gold_ent_val=True,
+    use_gold_filter_val=[True, False],
+    use_thres_train=[True, False],
+    use_thres_val=[True, False],
+    max_epochs=15,
 )
 run_configs = [
-    {
-        "tag": "alpha-G0",
-        "use_graph_layers": 0,
-    },
-    {
-        "tag": "alpha-G1",
-        "use_graph_layers": 1,
-    },
-    {
-        "tag": "alpha-G2",
-        "use_graph_layers": 2,
-    },
-    {
-        "tag": "alpha-G3",
-        "use_graph_layers": 3,
-    },
+
 ]
 
 
@@ -77,24 +73,28 @@ def get_all_combinations(run_config):
 
 def exec_main(config):
     time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-    print(utils.green("\n[XJOBS]"), time_str, "Running: {}".format(config["tag"]))
+    print(utils.green("\n[XJOBS]"), time_str, f"Running: {utils.magenta(config['tag'])}")
     config["run_id"] = run_id
     config["fast_dev_run"] = args.fast_dev_run
     config["output"] = args.output
     if not config.get("gpu") or config.get("gpu") not in ["0", "1", "2", "3"]:
         config["gpu"] = GPU
 
+    result = None
+
     try:
-        return main(True, **config)
+        result = main(True, **config)
+        print(config["tag"], "Done!")
 
     except KeyboardInterrupt:
         print(utils.red("\n[XJOBS]"), "KeyboardInterrupt: Interrupted by user!")
-        return None
+        wandb.finish()
 
     except Exception as e:
         print(utils.red("\n[XJOBS]"), "Running Error: {}, Continue...".format(e))
-        return None
+        wandb.finish()
 
+    return result
 
 parser = argparse.ArgumentParser(add_help=False)
 parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
@@ -110,14 +110,52 @@ else:
 # 生成所有的组合
 combinations = get_all_combinations(run_config)
 
+results = []
+
 for config in run_configs:
-    print(exec_main(config))
+    result = exec_main(config)
+    if result:
+        pprint(result)
+        result["tag"] = config["tag"]
+        results.append(result)
+
 
 for i, config in enumerate(combinations):
     config["tag"] = f"{config['tag']}"
-    for key in index:
-        if config.get(key) is not None:
-            config["tag"] += f"-{key}_{config[key]}"
+    for key, value in config.items():
+        if key in index:
+            if value is True:
+                config["tag"] += f"-{index[key]}"
+            elif value is False:
+                pass
+            else:
+                config["tag"] += f"-{index[key]}{value}"
 
-    print(exec_main(config))
+    result = exec_main(config)
+    if result:
+        pprint(result)
+        result["tag"] = config["tag"]
+        results.append(result)
 
+
+# 打印表格
+print(utils.green("\n[XJOBS]"), "All Done!")
+
+table = PrettyTable()
+
+key_lists = ["Tag", "test_f1", "test_p", "test_r", "ner_f1", "rel_f1", "best_f1"]
+
+table.field_names = key_lists
+for res in results:
+    row = []
+    for key in key_lists:
+        value = res.get(key.lower(), 'N/A')
+        if isinstance(value, float):
+            value = f"{value*100:.2f}"
+
+        row.append(value)
+
+    table.add_row(row)
+
+table.align["Tag"] = "l"
+print(table)

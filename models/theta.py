@@ -3,6 +3,7 @@ import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from models.batch_filter import batch_filter
+from models.entity_pair_filter import FilterModel
 from models.re_model import REModel
 from models.ner_model import NERModel
 from models.runtime_graph import RuntimeGraph
@@ -124,8 +125,8 @@ class Theta(pl.LightningModule):
 
         self.rel_model = REModel(self)
         self.ner_model = NERModel(self)
-        self.span_ner = SpanEntityModel(self)
-
+        self.filter = FilterModel(self)
+        self.span_ner = SpanEntityModel(self) if config.use_spert else None
         self.graph = RuntimeGraph(self) if config.use_graph_layers > 0 else None
 
 
@@ -188,7 +189,7 @@ class Theta(pl.LightningModule):
         if mode != "train":
             if self.config.use_spert:
                 entities = self.span_ner.decode_entities(ner_logits,  pos=pos)
-            elif self.config.ner_rate > 0:
+            elif self.config.ner_rate > 0 and not self.config.use_gold_ent_val:
                 entities = self.ner_model.decode_entities(ner_logits, pos=pos)
 
             output["pred_entities"] = entities
@@ -255,6 +256,14 @@ class Theta(pl.LightningModule):
         rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples')
 
         self.test_f1 = f1
+        self.test_p = p
+        self.test_r = r
+        self.ner_f1 = ner_f1
+        self.ner_p = ner_p
+        self.ner_r = ner_r
+        self.rel_f1 = rel_f1
+        self.rel_p = rel_p
+        self.rel_r = rel_r
         self.log_dict_values({'test_f1': f1, 'test_p': p, 'test_r': r})
         self.log_dict_values({'test_ner_f1': ner_f1, 'test_ner_p': ner_p, 'test_ner_r': ner_r})
         self.log_dict_values({'test_rel_f1': rel_f1, 'test_rel_p': rel_p, 'test_rel_r': rel_r})
