@@ -46,7 +46,7 @@ def main(func_mode=False, **kwargs):
 
     # Configure Trainer
     trainer = pl.Trainer.from_argparse_args(
-        config.args,
+        config.args, # type: ignore
         accelerator='gpu', devices=1,
         callbacks=callbacks,
         log_every_n_steps=10,
@@ -55,18 +55,25 @@ def main(func_mode=False, **kwargs):
         logger=configure_logger(config),
     )
 
-    if config.auto_lr:
-        print(utils.yellow("Auto LR Finding..."))
-        trainer.tune(theta, datamodule=data)  # with auto_lr_find=True
+    # 加载 checkpoint 测试
+    if config.test_from_ckpt:
+        print(utils.yellow("Test from checkpoint..."))
+        trainer.test(ckpt_path=config.best_model_path, model=theta, datamodule=data)
 
-    trainer.fit(theta, datamodule=data)
-    config.save_best_model_path(model_checkpoint.best_model_path)
-    config.save_config()
+    else:
 
-    trainer.test(theta, datamodule=data)
+        if config.auto_lr:
+            print(utils.yellow("Auto LR Finding..."))
+            trainer.tune(theta, datamodule=data)  # with auto_lr_find=True
 
-    wandb.finish()
-    return {
+        trainer.fit(theta, datamodule=data)
+        config.save_best_model_path(model_checkpoint.best_model_path)
+        config.save_config()
+
+        trainer.test(theta, datamodule=data)
+        wandb.finish()
+
+    result = {
         "best_model_path": model_checkpoint.best_model_path,
         "bets_f1": theta.best_f1,
         "test_f1": theta.test_f1,
@@ -79,6 +86,9 @@ def main(func_mode=False, **kwargs):
         "rel_p": theta.rel_p,
         "rel_r": theta.rel_r,
     }
+
+    config.save_result(result)
+    return result
 
 
 def configure_logger(config):

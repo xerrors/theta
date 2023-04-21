@@ -12,6 +12,8 @@ from prettytable import PrettyTable
 # 根据 run_config 生成所有的组合
 run_id = "RUN_{}".format(time.strftime("%Y%m%d-%H%M%S"))
 
+# To Test
+
 index = {
     "use_graph_layers": "G",
     "use_two_plm": "Two-",
@@ -22,15 +24,27 @@ index = {
     "use_thres_train": "ThresT",
     "use_thres_val": "ThresV",
     "max_epochs": "E",
+    "use_filter_opt1": "Fopt1-",
+    "use_filter_label_enhance": "LabelEn",
+    "ent_pair_threshold": "T-",
 }
+
+
+# run_config = dict(
+#     tag="Eta",
+#     test_from_ckpt="output/ouput-2023-04-21_16-26-27-Eta-ThresV-ThresT-LabelEn-T-0.5-Fopt1-concat/config.yaml",
+#     ent_pair_threshold=[0.1, 0.2, 0.3, 0.4]
+# )
+
 run_config = dict(
     tag="Eta",
-    use_gold_ent_val=True,
-    use_gold_filter_val=[True, False],
-    use_thres_train=[True, False],
-    use_thres_val=[True, False],
-    max_epochs=15,
+    use_thres_val=True,
+    use_thres_train=True,
+    use_filter_label_enhance=[True, False],
+    ent_pair_threshold=0.3,
+    use_filter_opt1="concat",
 )
+
 run_configs = [
 
 ]

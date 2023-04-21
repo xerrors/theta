@@ -49,14 +49,15 @@ use_thres_train: False
 use_thres_val: False
 use_gold_ent_val: False
 use_gold_filter_val: False
+use_filter_label_enhance: True
 
 # 待验证
-use_spert: False # defeat
-use_spert_opt1: "max" # defeat
-use_rel_cat: "none" # default none, pure
-use_crf: False # 目前效果不太行
-use_dynamic_rel_threshold: True
-ent_pair_threshold: 0.5
+# use_spert: False # defeat
+# use_spert_opt1: "max" # defeat
+# use_rel_cat: "none" # default none, pure
+# use_crf: False # 目前效果不太行
+# use_dynamic_rel_threshold: True
+ent_pair_threshold: 0.3
 
 # set
 use_ent_pred_rel: "tag"

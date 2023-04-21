@@ -71,7 +71,8 @@ class DataModule(pl.LightningDataModule):
         return dataset
 
     def train_dataloader(self):
-        return DataLoader(self.data_train, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
+        shuffle = False if self.config.use_graph_layers > 0 else True
+        return DataLoader(self.data_train, shuffle=shuffle, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
 
     def val_dataloader(self):
         return DataLoader(self.data_val, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore

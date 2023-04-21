@@ -1,5 +1,6 @@
 import itertools
 import math
+import random
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
@@ -48,6 +49,9 @@ class FilterModel(pl.LightningModule):
                     continue
                 index = self.convert_bij_to_index((b,i,j), entities)
                 labels[index] = 1
+                if self.config.use_filter_label_enhance:
+                    index = self.convert_bij_to_index((b,j,i), entities)
+                    labels[index] = 1
         return labels
 
     def forward(self, hidden_state, entities, triples=None, mode="train"):
@@ -67,8 +71,33 @@ class FilterModel(pl.LightningModule):
 
             ent_hs_x = self.sub_proj(ent_hs)
             ent_hs_y = self.obj_proj(ent_hs)
+
+            if not self.config.use_filter_opt1 or self.config.use_filter_opt1 == "attention":
+                ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-2, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
+
+            elif self.config.use_filter_opt1 == "attention_softmax":
+                ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-2, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
+                ent_hs_pair = ent_hs_pair.softmax(dim=-1)
+
+            elif self.config.use_filter_opt1 == "concat":
+                ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
+                ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
+                ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)    # (ent_num, ent_num, hidden_size * 2)
+                ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
+
+            elif self.config.use_filter_opt1 == "concat_softmax":
+                ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
+                ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
+                ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)
+                ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
+                ent_hs_pair = ent_hs_pair.softmax(dim=-1)
+
+            else:
+                raise ValueError("use_filter_opt1 must be in [None, 'attention', 'attention_softmax', 'concat', 'concat_softmax']")
+
+
             # torch.matmul(A, B) = A @ B
-            ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-2, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
+
             ent_hs_pair = ent_hs_pair.view(-1, 1).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
 
             logits.append(ent_hs_pair)
@@ -107,19 +136,23 @@ class FilterModel(pl.LightningModule):
 
         ent_groups = []
 
-        for sub_pos, obj_pos in itertools.permutations(entities[batch_idx], 2):
-            i = map_dict[(batch_idx, sub_pos[0])]
-            j = map_dict[(batch_idx, obj_pos[0])]
-            index = self.convert_bij_to_index((batch_idx, i, j), entities)
-            score = logits[index].item()
+        pairs = list(itertools.permutations(entities[batch_idx], 2))
+        if len(pairs) > 0:
+            random.shuffle(pairs)
 
-            if self.config.use_filter_hard and mode != 'train':
-                sub_type, obj_type = sub_pos[2], obj_pos[2]
-                if self.hard_filter_table[sub_type, obj_type] == 0:
-                    continue
+            for sub_pos, obj_pos in pairs:
+                i = map_dict[(batch_idx, sub_pos[0])]
+                j = map_dict[(batch_idx, obj_pos[0])]
+                index = self.convert_bij_to_index((batch_idx, i, j), entities)
+                score = logits[index].item()
 
-            ent_groups.append((sub_pos, obj_pos, score))
-        ent_groups = sorted(ent_groups, key=lambda a : a[-1], reverse=True)
+                if self.config.use_filter_hard and mode != 'train':
+                    sub_type, obj_type = sub_pos[2], obj_pos[2]
+                    if self.hard_filter_table[sub_type, obj_type] == 0:
+                        continue
+
+                ent_groups.append((sub_pos, obj_pos, score))
+            ent_groups = sorted(ent_groups, key=lambda a : a[-1], reverse=True)
 
         return ent_groups
 

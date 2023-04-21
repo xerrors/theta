@@ -1,3 +1,4 @@
+from argparse import Namespace
 import os
 import time
 import yaml
@@ -37,13 +38,23 @@ class Config(SimpleConfig):
             args < config < ext_config
         """
 
-        if args.test_from_ckpt:
-            self.load_from_ckpt() # type: ignore
-            self.test_from_ckpt = args.test_from_ckpt
-            self.last_test_time = time.strftime(
-                "%Y-%m-%d_%H-%M-%S", time.localtime())
-            self.test_dir = os.path.join(
-                self.output_dir, f"test-result-{self.last_test_time}")
+        ckpt = args.test_from_ckpt or kwargs.get("test_from_ckpt")
+        if ckpt:
+            self.load_from_ckpt(ckpt) # type: ignore
+            self.wandb = False
+
+            self.ext_config = kwargs
+            self.args = Namespace(**self.formatted_args) # type: ignore
+            self.model = SimpleConfig(self.model)
+            self.dataset = SimpleConfig(self.dataset)
+            self.__load_ext_config()
+            if kwargs.get("gpu") == "not specified":
+                self.gpu = utils.get_gpu_by_user_input()
+
+            self.test_from_ckpt = ckpt
+            self.last_test_time = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+            self.test_result = os.path.join(self.output_dir, f"test-result-{self.tag}-{self.last_test_time}.json")
+            self.prepare()
             return
 
         self.args = args
@@ -114,6 +125,8 @@ class Config(SimpleConfig):
             self.wandb = False
             print(utils.blue_background(">>> FAST DEV RUN MODE <<<"))
 
+        self.test_result = os.path.join(self.output_dir, f"test-result.json")
+
     def prepare(self):
         # 设置日志等级
         utils.config_logging(self)
@@ -130,6 +143,7 @@ class Config(SimpleConfig):
     def save_config(self, filename="config.yaml"):
         """将自身的所有属性都保存下来，不包含方法"""
         config = {}
+        self.formatted_args = SimpleConfig(vars(self.args))
         for key, value in self.items():
             if isinstance(value, SimpleConfig):
                 items = {}
@@ -141,8 +155,14 @@ class Config(SimpleConfig):
             elif not key.startswith("__") and not callable(value) and not key == "args":
                 config[key] = value
 
-        with open(os.path.join(self.output_dir, filename), 'w') as f:
+        file_path = os.path.join(self.output_dir, filename)
+        print(utils.green("Done!"), f"Config saved at: {file_path}")
+        with open(file_path, 'w') as f:
             yaml.dump(config, f)
+
+    def save_result(self, result:dict):
+        with open(self.test_result, 'w') as f:
+            json.dump(result, f, indent=4)
 
     def load_from_ckpt(self, ckpt_path):
         # 从 ckpt 中读取
