@@ -5,7 +5,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from torchcrf import CRF
 
-from models.components import MultiNonLinearClassifier
+from models.components import MultiNonLinearClassifier, SelfAttention
 from models.functions import getPretrainedLMHead
 
 
@@ -17,22 +17,28 @@ class NERModel(pl.LightningModule):
         self.ent_ids = theta.ent_ids
 
         config = self.config
+        hidden_size = config.model.hidden_size
 
         if config.use_ner == "lmhead":
             self.lmhead = getPretrainedLMHead(theta.plm_model, config.model)
 
         elif config.use_ner == "linear":
-            self.classifier = nn.Linear(config.model.hidden_size, len(self.ent_ids))
+            self.classifier = nn.Linear(hidden_size, len(self.ent_ids))
 
         else:
-            self.classifier = MultiNonLinearClassifier(config.model.hidden_size, len(self.ent_ids))
+            self.classifier = MultiNonLinearClassifier(hidden_size, len(self.ent_ids), layers_num=2)
 
         if self.config.use_crf:
             self.crf = CRF(len(self.ent_ids), batch_first=True)
 
+        self.self_attn = SelfAttention(embed_dim=hidden_size)
+
         self.num_ent_type = len(self.config.dataset.ents)
 
     def forward(self, hidden_state, labels=None, graph=None, mask=None):
+
+        if self.config.use_ent_attn:
+            hidden_state = self.self_attn(hidden_state)
 
         if graph is not None:
             hidden_state = graph.query_ents(hidden_state)

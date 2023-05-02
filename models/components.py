@@ -3,19 +3,61 @@ import torch.nn as nn
 import pytorch_lightning as pl
 
 class MultiNonLinearClassifier(nn.Module):
-    def __init__(self, hidden_size, tag_size, dropout_rate=0.1):
+    def __init__(self, hidden_size, tag_size, layers_num=1, hidden_dim=None, dropout_rate=0.1):
         super(MultiNonLinearClassifier, self).__init__()
         self.tag_size = tag_size
-        self.linear = nn.Linear(hidden_size, int(hidden_size / 2))
-        self.hidden2tag = nn.Linear(int(hidden_size / 2), self.tag_size)
+        self.activation = nn.ReLU()
         self.dropout = nn.Dropout(dropout_rate)
 
-    def forward(self, input_features):
-        features_tmp = self.linear(input_features)
-        features_tmp = nn.ReLU()(features_tmp)
-        features_tmp = self.dropout(features_tmp)
-        features_output = self.hidden2tag(features_tmp)
-        return features_output
+        if hidden_dim is None:
+            hidden_dim = hidden_size // 2
+
+        input_dims = [hidden_size] + [hidden_dim] * (layers_num - 1)
+        output_dims = [hidden_dim] * layers_num
+
+        self.layers = nn.ModuleList([
+            nn.Sequential(
+                nn.Linear(input_dims[i], output_dims[i]),
+                self.activation,
+                self.dropout
+            ) for i in range(layers_num)
+        ])
+        self.classifier = nn.Linear(hidden_dim, tag_size)
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        x = self.classifier(x)
+        return x
+
+
+class SelfAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads=4):
+        super(SelfAttention, self).__init__()
+        self.multihead_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=0.1, bias=True)
+        self.layer_norm = nn.LayerNorm(embed_dim)
+
+    def forward(self, x):
+        attn_output, _ = self.multihead_attn(x, x, x)
+        x = self.layer_norm(x + attn_output)
+        return x
+
+
+
+# class MultiNonLinearClassifier(nn.Module):
+#     def __init__(self, hidden_size, tag_size, dropout_rate=0.1):
+#         super(MultiNonLinearClassifier, self).__init__()
+#         self.tag_size = tag_size
+#         self.linear = nn.Linear(hidden_size, int(hidden_size / 2))
+#         self.hidden2tag = nn.Linear(int(hidden_size / 2), self.tag_size)
+#         self.dropout = nn.Dropout(dropout_rate)
+
+#     def forward(self, input_features):
+#         features_tmp = self.linear(input_features)
+#         features_tmp = nn.ReLU()(features_tmp)
+#         features_tmp = self.dropout(features_tmp)
+#         features_output = self.hidden2tag(features_tmp)
+#         return features_output
 
 class FeedForward(nn.Module):
     def __init__(self, input_dim, num_layers, hidden_dims, activations, dropout):

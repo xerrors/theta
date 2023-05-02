@@ -66,6 +66,7 @@ class DataModule(pl.LightningDataModule):
             features["triples"],
             features["ent_maps"],
             features["sent_mask"],
+            features["span_mask"],
             )
 
         return dataset

@@ -3,7 +3,7 @@ import math
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from models.components import MultiNonLinearClassifier
+from models.components import MultiNonLinearClassifier, SelfAttention
 from models.functions import getPretrainedLMHead
 
 from utils.funcs import cosine_ease_in_out_minmax
@@ -18,6 +18,7 @@ class REModel(pl.LightningModule):
         self.ent_ids = theta.ent_ids
 
         config = self.config
+        hidden_size = config.model.hidden_size
 
         if config.use_rel == 'lmhead':
             if config.use_two_plm:
@@ -26,14 +27,17 @@ class REModel(pl.LightningModule):
                 self.lmhead = getPretrainedLMHead(theta.plm_model, config.model)
 
         elif config.use_rel == 'linear':
-            self.classifier = nn.Linear(config.model.hidden_size, len(self.rel_ids))
+            self.classifier = nn.Linear(hidden_size, len(self.rel_ids))
 
         else:
-            self.classifier = MultiNonLinearClassifier(config.model.hidden_size, len(self.rel_ids))
+            self.classifier = MultiNonLinearClassifier(hidden_size, len(self.rel_ids))
 
         self.grt_count = 0
         self.hit_count = 0
+        self.rel_count = 0
         self.cur_epoch = 0
+        self.pre_mode = None
+        self.filter_score = {} # p, r, f1
         self.rel_type_num = len(self.config.dataset.ents)
 
     def get_triples_label(self, triples, device, ent_groups, mode, epoch):
@@ -67,15 +71,12 @@ class REModel(pl.LightningModule):
                 gt_count += 1
 
         hit_count = (triple_labels != 0).sum().item()
+        rel_count = len(triple_labels)
 
-        if mode != "train":
-            if epoch != self.cur_epoch:
-                self.cur_epoch = epoch
-                self.grt_count = 0
-                self.hit_count = 0
-
+        if mode != "train" and mode == self.pre_mode:
             self.grt_count += gt_count
             self.hit_count += hit_count
+            self.rel_count += rel_count
 
         return triple_labels
 
@@ -84,20 +85,23 @@ class REModel(pl.LightningModule):
 
         ent_ids = theta.ent_ids
         device = hidden_state.device
-        input_ids, _, pos, triples, _, _ = batch
+        input_ids, _, pos, triples, _, _, _ = batch
         bsz, seq_len = input_ids.shape
 
-        is_train_thres = self.config.ent_pair_threshold and self.config.use_thres_train and mode == 'train'
-        is_val_thres = self.config.ent_pair_threshold and self.config.use_thres_val and mode != 'train'
-        use_thres = is_train_thres or is_val_thres
+        # is_train_thres = self.config.ent_pair_threshold and self.config.use_thres_train and mode == 'train'
+        # is_val_thres = self.config.ent_pair_threshold and self.config.use_thres_val and mode != 'train'
+        # use_thres = is_train_thres or is_val_thres
 
         # 如果启用 use_thres_train，则训练阶段实际上是使用的是所有的有关系的实体对
         # 如果启用 use_thres_val，则验证阶段使用的都是置信度高的实体对
         # 暂时使用 calc_num_training_steps 来反复计算，如果后面正式效果可行，再优化这部分的代码
-        cur_threshold = self.config.ent_pair_threshold if use_thres else -1
+        cur_threshold = -1
+        if self.config.use_thres_val and mode != 'train':
+            assert self.config.ent_pair_threshold >= 0, "ent_pair_threshold must be >= 0"
+            cur_threshold = self.config.ent_pair_threshold
 
         logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
-        logits = logits.sigmoid()
+        labels = theta.filter.get_filter_label(entities, triples, logits, map_dict)
 
         max_len= 512
         ent_groups = []
@@ -115,11 +119,9 @@ class REModel(pl.LightningModule):
         for entity in entities:
             ent_num += len(entity)
 
-        # 训练的时候使用真实标签来训练，测试的时候使用预测标签来训练
-        if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
-            logits = theta.filter.get_filter_label(entities, triples, logits, map_dict)
-            if self.config.use_thres_train:
-                logits[:logits.nonzero().size(0) * 3] = 1.0
+        # # 训练的时候使用真实标签来训练，测试的时候使用预测标签来训练
+        # if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
+        #     logits = labels
 
         for b, entity in enumerate(entities):
 
@@ -131,7 +133,25 @@ class REModel(pl.LightningModule):
             masks = [1 for b in range(sent_len+2)]
 
             # 先构建一个初始的实体组，然后按照置信度排序，能排多少是多少
-            draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
+            gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode)
+            pred_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
+
+            # 如果当前的 epoch 大于最大的 epochs 的 1/3 的时候，就开始使用阈值过滤
+            count = len(gold_draft_ent_groups)
+            if self.config.use_thres_train and mode == "train":
+                r = self.filter_score.get("recall", 0)
+                pred_count = len([1 for e in pred_draft_ent_groups if e[-1] > 0.5]) # use 0.1 as threshold TODO
+                # c = max(\theta, c - c * r + \hat{c} * r)
+                count = max(5, int(count - count * r + pred_count * r))
+
+            if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
+                draft_ent_groups = gold_draft_ent_groups[:count]
+            else:
+                draft_ent_groups = pred_draft_ent_groups
+
+            gold_count = len([1 for e in gold_draft_ent_groups if e[-1] != 0])
+            assert gold_count == 0 or gold_count != len(gold_draft_ent_groups), "不对劲"
+            assert gold_count == 0 or len(ids) + gold_count * 3 <= max_len, "实体过多，超过最大长度"
 
             marker_mask = 1
             for ent_pair in draft_ent_groups:
@@ -228,7 +248,7 @@ class REModel(pl.LightningModule):
 
     #     ent_ids = theta.ent_ids
     #     device = hidden_state.device
-    #     input_ids, _, pos, triples, _, _ = batch
+    #     input_ids, _, pos, triples, _, _, _ = batch
     #     bsz, seq_len = input_ids.shape
 
     #     ent_groups = []
@@ -368,8 +388,24 @@ class REModel(pl.LightningModule):
                     entities=entities,
                     mode=mode)
 
-        if mode != 'train' and self.grt_count != 0:
-            theta.log("info/hit_rate", self.hit_count / self.grt_count)
+
+        '''
+        这里的 hit_rate 是指过滤后，正确的候选实体对与真实实体对的数量之比
+        所体现的是关系抽取和实体过滤工作作用下的结果
+        最终的 F1 在 PR 相差不大的情况下，可以理解为 hit_rate * rel_f1
+        '''
+        if mode != 'train' and (mode != self.pre_mode or mode == 'test'):
+            self.filter_score["precision"] = self.hit_count / (self.rel_count + 1e-8)
+            self.filter_score["recall"] = self.hit_count / (self.grt_count + 1e-8)
+            self.filter_score["f1"] = 2 * self.hit_count / (self.grt_count + self.rel_count + 1e-8)
+            theta.log("info/pair_precision", self.filter_score["precision"])
+            theta.log("info/pair_recall", self.filter_score["recall"])
+            theta.log("info/pair_f1", self.filter_score["f1"])
+            self.hit_count = 0
+            self.grt_count = 0
+            self.rel_count = 0
+
+        self.pre_mode = mode
 
         ent_groups, hidden_output, triple_labels, filter_loss = output
 

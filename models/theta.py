@@ -126,14 +126,14 @@ class Theta(pl.LightningModule):
         self.rel_model = REModel(self)
         self.ner_model = NERModel(self)
         self.filter = FilterModel(self)
-        self.span_ner = SpanEntityModel(self) if config.use_spert else None
+        self.span_ner = SpanEntityModel(self)
         self.graph = RuntimeGraph(self) if config.use_graph_layers > 0 else None
 
 
     def forward(self, batch, mode="train"):
 
         # Forward
-        input_ids, attention_mask, pos, triples, ent_maps, sent_mask = batch
+        input_ids, attention_mask, pos, triples, ent_maps, sent_mask, span_mask = batch
         outputs = self.plm_model(input_ids, attention_mask=attention_mask, output_hidden_states=True) # type: ignore
 
         # 一些参数
@@ -144,8 +144,8 @@ class Theta(pl.LightningModule):
 
         # [REQUIRED] 命名实体识别损失
         if self.config.use_spert:
-            ner_logits, ner_loss = self.span_ner(hidden_state, labels=ent_maps, graph=self.graph, pos=pos)
-            entities = self.span_ner.decode_gold_entities(ent_maps,  pos=pos)
+            ner_logits, ner_loss = self.span_ner(hidden_state, span_mask=span_mask, labels=ent_maps, graph=self.graph, pos=pos)
+            entities = self.span_ner.decode_gold_entities(ent_maps, pos=pos)
 
         else:
             ner_logits, ner_loss = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask)
@@ -188,7 +188,7 @@ class Theta(pl.LightningModule):
         # 如果是测试阶段，使用预测的 triples
         if mode != "train":
             if self.config.use_spert:
-                entities = self.span_ner.decode_entities(ner_logits,  pos=pos)
+                entities = self.span_ner.decode_entities(ner_logits, span_mask, pos=pos)
             elif self.config.ner_rate > 0 and not self.config.use_gold_ent_val:
                 entities = self.ner_model.decode_entities(ner_logits, pos=pos)
 
@@ -270,7 +270,7 @@ class Theta(pl.LightningModule):
 
     def eval_step_output(self, batch, output):
         # batch = batch_filter(batch, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id)
-        input_ids, _, pos, triples, ent_maps, sent_mask  = batch # type: ignore
+        input_ids, _, pos, triples, ent_maps, sent_mask, _  = batch # type: ignore
 
         pred_entities = self.get_span_set(input_ids, output["pred_entities"])
         gold_entities = self.get_span_set(input_ids, output["gold_entities"])

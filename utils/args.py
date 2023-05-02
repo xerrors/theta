@@ -19,7 +19,7 @@ def setup_parser(func_mode, **kwargs):
 
     # Basic arguments
     parser.add_argument("--gpu", type=str, default="not specified")
-    parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--wandb", action="store_true", default=False)
     parser.add_argument("--offline", action="store_true", default=False)
     parser.add_argument("--output", type=str, default="output")

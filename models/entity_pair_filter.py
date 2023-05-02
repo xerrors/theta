@@ -15,14 +15,17 @@ class FilterModel(pl.LightningModule):
         super().__init__()
         self.config = theta.config
         self.log = theta.log
+        self.pre_mode = None
+        self.pred = None
+        self.labels = None
 
-        self.filter_entity_pair_net = MultiNonLinearClassifier(self.config.model.hidden_size * 2, 1)
+        self.filter_entity_pair_net = MultiNonLinearClassifier(self.config.model.hidden_size * 2, 1, layers_num=2)
 
         self.sub_proj = nn.Linear(self.config.model.hidden_size, self.config.model.hidden_size)
         self.obj_proj = nn.Linear(self.config.model.hidden_size, self.config.model.hidden_size)
 
         self.hard_filter_table = torch.load("datasets/ace2005/ent_rel_corres.data").sum(dim=-1)
-
+        self.dropout = nn.Dropout(0.1)
 
     def convert_bij_to_index(self, bij, entities):
         """找到 batch i 中的第 i 个实体和第 j 个实体在 logits 里面的位置
@@ -59,6 +62,8 @@ class FilterModel(pl.LightningModule):
         logits = []
         map_dict = {}
 
+        hidden_state = self.dropout(hidden_state)
+
         for i in range(len(entities)):
             if len(entities[i]) == 0: continue
 
@@ -66,7 +71,20 @@ class FilterModel(pl.LightningModule):
             for j, e in enumerate(entities[i]):
                 map_dict[(i, e[0])] = j
 
-            ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
+            if not self.config.use_ent_hidden_state or self.config.use_ent_hidden_state == "head":
+                ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])
+            elif self.config.use_ent_hidden_state == "add":
+                head_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])
+                tail_hs = torch.stack([hidden_state[i, ent[1]-1] for ent in entities[i]])
+                ent_hs = head_hs + tail_hs
+            elif self.config.use_ent_hidden_state == "mean":
+                ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].mean(dim=0) for ent in entities[i]])
+            elif self.config.use_ent_hidden_state == "max":
+                ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].max(dim=0)[0] for ent in entities[i]])
+            else:
+                raise NotImplementedError("use_ent_hidden_state: {}".format(self.config.use_ent_hidden_state))
+
+            # ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
             ent_num, hidden_size = ent_hs.shape
 
             ent_hs_x = self.sub_proj(ent_hs)
@@ -95,33 +113,39 @@ class FilterModel(pl.LightningModule):
             else:
                 raise ValueError("use_filter_opt1 must be in [None, 'attention', 'attention_softmax', 'concat', 'concat_softmax']")
 
-
-            # torch.matmul(A, B) = A @ B
-
             ent_hs_pair = ent_hs_pair.view(-1, 1).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
 
             logits.append(ent_hs_pair)
 
         logits = torch.cat(logits, dim=0)    # (batch_size * ent_num * ent_num,)
+        logits = logits.sigmoid()
 
         loss = torch.tensor(0.0, device=logits.device)
         if triples is not None:
             # sub_s, sub_e, obj_s, obj_e, rel_id, sub_type, obj_type
             labels = self.get_filter_label(entities, triples, logits, map_dict)
 
-            loss_fct = nn.BCEWithLogitsLoss()
+            loss_fct = nn.BCELoss()
             loss = loss_fct(logits, labels)
 
             if mode == 'train':
                 # 将 logits > 0.5 的位置置为 1，否则置为 0，然后与 labels 计算 f1
                 pred = torch.where(logits > 0.5, torch.ones_like(logits), torch.zeros_like(logits))
-                f1 = f1_score(labels.cpu().numpy(), pred.cpu().numpy()) if pred.sum() != 0 else 0.0
-                precision = precision_score(labels.cpu().numpy(), pred.cpu().numpy()) if pred.sum() != 0 else 0.0
-                recall = recall_score(labels.cpu().numpy(), pred.cpu().numpy()) if labels.sum() != 0 else 0.0
-                self.log("info/filter_f1", float(f1))
-                self.log("info/filter_precision", float(precision))
-                self.log("info/filter_recall", float(recall))
+                self.pred = pred if self.pred is None else torch.cat([self.pred, pred], dim=0)
+                self.labels = labels if self.labels is None else torch.cat([self.labels, labels], dim=0)
 
+            elif self.pre_mode == 'train' and self.pred is not None and self.labels is not None:
+                labels = self.labels.cpu().numpy()
+                pred = self.pred.cpu().numpy()
+                self.log("info/filter_f1", float(f1_score(labels, pred, zero_division=0)))
+                self.log("info/filter_precision", float(precision_score(labels, pred, zero_division=0)))
+                self.log("info/filter_recall", float(recall_score(labels, pred, zero_division=0)))
+                self.pred = None
+                self.labels = None
+            else:
+                pass
+
+        self.pre_mode = mode
         return logits, loss, map_dict
 
     def get_draft_ent_groups(self, entities, batch_idx, map_dict, logits, mode):
@@ -143,6 +167,8 @@ class FilterModel(pl.LightningModule):
             for sub_pos, obj_pos in pairs:
                 i = map_dict[(batch_idx, sub_pos[0])]
                 j = map_dict[(batch_idx, obj_pos[0])]
+                if i == j:
+                    continue
                 index = self.convert_bij_to_index((batch_idx, i, j), entities)
                 score = logits[index].item()
 

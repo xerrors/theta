@@ -8,7 +8,7 @@ def list_save_index(l, value):
 
 
 def batch_filter(batch, sep_id, pad_id, hidden_state=None):
-    input_ids, attention_mask, pos, triples, ent_maps, sent_mask = batch
+    input_ids, attention_mask, pos, triples, ent_maps, sent_mask, _ = batch
 
     batch_size = input_ids.shape[0]
 

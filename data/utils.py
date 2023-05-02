@@ -32,7 +32,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
 
     max_seq_len = config.get("max_seq_len", config.dataset.max_seq_len) # 最长的句子序列是 103
     context_window = config.get("context_window", 0)
-    # max_span_length = config.get("max_span_length", 10)
+    max_span_length = config.get("max_span_length", 10)
 
     if context_window and context_window > max_seq_len:
         print(f'context_window{context_window} > max_seq_len{max_seq_len}, context window will be set as `max_seq_len - 2`')
@@ -133,6 +133,10 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             sent_start += 1         # sent_start 不包含 cls token 或者 context window 的 token
             sent_end += sent_start  # sent_end 包含 sep token 或者 context window 的 token
 
+            span_mask = np.zeros((max_seq_len, max_seq_len), dtype=np.int16)
+            for i in range(sent_start, sent_end):
+                span_mask[i, i:min(sent_end, i+max_span_length)] = 1
+
             # 实体的位置索引映射
             start2idx = [i + sent_start for i in start2idx]
             end2idx = [i + sent_start for i in end2idx] # 因为有 cls token
@@ -156,7 +160,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 #            0 1   2   3   4   5   6   7   8   9   10  11  12  13  14
                 ent_maps[ent_s] = ner2id[ner.label] + 1
                 ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
-                ent_maps_2d[ent_s, ent_e] = ner2id[ner.label] + 1
+                ent_maps_2d[ent_s, ent_e] = ner2id[ner.label] + 1 # 左闭右开
+                assert ent_s < ent_e
 
                 if ner.span not in added:
                     ner_total_len += ent_e - ent_s
@@ -190,6 +195,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             sample['pos'] = torch.tensor((sent_start, sent_end, sent.sentence_ix, sent.sentence_start, i), dtype=torch.int16)
             sample['ent_maps'] = ent_maps if not config.use_spert else ent_maps_2d
             sample['sent_mask'] = sent_mask
+            sample['span_mask'] = torch.tensor(span_mask, dtype=torch.int16)
             samples.append(sample)
 
     avg_length = sum([len(sample['tokens']) for sample in samples]) / len(samples)
@@ -203,6 +209,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     d_triples = torch.stack([sample["triples"] for sample in samples])
     d_ent_maps = torch.stack([sample["ent_maps"] for sample in samples])
     d_sent_mask = torch.stack([sample["sent_mask"] for sample in samples])
+    d_span_mask = torch.stack([sample["span_mask"] for sample in samples])
 
     return {
         "input_ids": d_input_ids,
@@ -211,6 +218,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
         "triples": d_triples,
         "ent_maps": d_ent_maps,
         "sent_mask": d_sent_mask,
+        "span_mask": d_span_mask,
     }
 
 

@@ -75,7 +75,7 @@ def main(func_mode=False, **kwargs):
 
     result = {
         "best_model_path": model_checkpoint.best_model_path,
-        "bets_f1": theta.best_f1,
+        "best_f1": theta.best_f1,
         "test_f1": theta.test_f1,
         "test_p": theta.test_p,
         "test_r": theta.test_r,
