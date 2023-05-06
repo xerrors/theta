@@ -34,14 +34,32 @@ class MultiNonLinearClassifier(nn.Module):
 class SelfAttention(nn.Module):
     def __init__(self, embed_dim, num_heads=4):
         super(SelfAttention, self).__init__()
-        self.multihead_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=0.1, bias=True)
+        self.multihead_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True)
         self.layer_norm = nn.LayerNorm(embed_dim)
+        self.mask = None
+
+    def create_mask(self, input_shape, input_device):
+        
+        mask = torch.zeros(input_shape[1], input_shape[1], device=input_device)
+        for i in range(input_shape[1]):
+            mask[i, i-10:i+10] = 1.0
+        # mask = mask.unsqueeze(0)
+        self.mask = mask
 
     def forward(self, x):
-        attn_output, _ = self.multihead_attn(x, x, x)
+        # 创建 mask 矩阵
+        if self.mask is None or self.mask.shape[0] < x.shape[1]:
+            self.create_mask(x.shape, x.device)
+            attn_mask = self.mask
+        elif self.mask.shape[0] >= x.shape[1]:
+            attn_mask = self.mask[:x.shape[1], :x.shape[1]].clone()
+        else:
+            raise ValueError("Mask shape error.")
+
+        # 执行 self-attention 操作
+        attn_output, _ = self.multihead_attn(x, x, x, attn_mask=attn_mask)
         x = self.layer_norm(x + attn_output)
         return x
-
 
 
 # class MultiNonLinearClassifier(nn.Module):

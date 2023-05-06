@@ -49,7 +49,7 @@ class REModel(pl.LightningModule):
 
         triple_labels = torch.zeros(len(ent_groups), device=device, dtype=torch.long)
 
-        if len(triples) == 0:
+        if triples is not None and len(triples) == 0:
             return triple_labels
 
         for i, pair in enumerate(ent_groups):
@@ -80,12 +80,15 @@ class REModel(pl.LightningModule):
 
         return triple_labels
 
-    def prepare(self, theta, batch, hidden_state, entities, mode):
+    def prepare(self, theta, hidden_state, batch, entities, mode="train"):
         """Get hidden state for the 2nd stage: relation classification"""
 
         ent_ids = theta.ent_ids
         device = hidden_state.device
+
+        # when in predict mode, only input_ids is not None, others are None
         input_ids, _, pos, triples, _, _, _ = batch
+
         bsz, seq_len = input_ids.shape
 
         # is_train_thres = self.config.ent_pair_threshold and self.config.use_thres_train and mode == 'train'
@@ -99,11 +102,17 @@ class REModel(pl.LightningModule):
         if self.config.use_thres_val and mode != 'train':
             assert self.config.ent_pair_threshold >= 0, "ent_pair_threshold must be >= 0"
             cur_threshold = self.config.ent_pair_threshold
+        elif mode != 'train':
+            cur_threshold = 0.001
 
-        logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
-        labels = theta.filter.get_filter_label(entities, triples, logits, map_dict)
+        if mode != "predict":
+            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
+            labels = theta.filter.get_filter_label(entities, triples, logits, map_dict)
+        else:
+            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode)
+            labels = None
 
-        max_len= 512
+        max_len= 1024
         ent_groups = []
         rel_input_ids = []
         rel_positional_ids = []
@@ -125,37 +134,47 @@ class REModel(pl.LightningModule):
 
         for b, entity in enumerate(entities):
 
-            sent_s, sent_e = pos[b, 0], pos[b, 1]
-            sent_len = sent_e - sent_s
+            if pos is not None:
+                sent_s, sent_e = pos[b, 0], pos[b, 1]
+                sent_len = sent_e - sent_s
+            else:
+                sent_len = (input_ids[b] != pad_token).sum().item()
+                sent_s, sent_e = 0, sent_len
 
             ids = [cls_token] + input_ids[b, sent_s:sent_e].tolist() + [sep_token]
             pos_ids = [b for b in range(sent_len+2)]
             masks = [1 for b in range(sent_len+2)]
 
             # 先构建一个初始的实体组，然后按照置信度排序，能排多少是多少
-            gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode)
-            pred_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
+            if mode != "predict":
+                gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode)
+                pred_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
 
-            # 如果当前的 epoch 大于最大的 epochs 的 1/3 的时候，就开始使用阈值过滤
-            count = len(gold_draft_ent_groups)
-            if self.config.use_thres_train and mode == "train":
-                r = self.filter_score.get("recall", 0)
-                pred_count = len([1 for e in pred_draft_ent_groups if e[-1] > 0.5]) # use 0.1 as threshold TODO
-                # c = max(\theta, c - c * r + \hat{c} * r)
-                count = max(5, int(count - count * r + pred_count * r))
+                # 如果当前的 epoch 大于最大的 epochs 的 1/3 的时候，就开始使用阈值过滤
+                count = len(gold_draft_ent_groups)
+                if self.config.use_thres_train and mode == "train":
+                    r = self.filter_score.get("recall", 0)
+                    pred_count = len([1 for e in pred_draft_ent_groups if e[-1] > 0.5]) # use 0.1 as threshold TODO
+                    # c = max(\theta, c - c * r + \hat{c} * r)
+                    count = max(5, int(count - count * r + pred_count * 2 * r))
 
-            if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
-                draft_ent_groups = gold_draft_ent_groups[:count]
+                if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
+                    draft_ent_groups = gold_draft_ent_groups[:count]
+                else:
+                    draft_ent_groups = pred_draft_ent_groups
+
+                gold_count = len([1 for e in gold_draft_ent_groups if e[-1] != 0])
+                assert gold_count == 0 or gold_count != len(gold_draft_ent_groups), "不对劲"
+                assert gold_count == 0 or len(ids) + gold_count * 3 <= max_len, "实体过多，超过最大长度"
+
             else:
-                draft_ent_groups = pred_draft_ent_groups
-
-            gold_count = len([1 for e in gold_draft_ent_groups if e[-1] != 0])
-            assert gold_count == 0 or gold_count != len(gold_draft_ent_groups), "不对劲"
-            assert gold_count == 0 or len(ids) + gold_count * 3 <= max_len, "实体过多，超过最大长度"
+                draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
 
             marker_mask = 1
             for ent_pair in draft_ent_groups:
-                (sub_s, sub_e, sub_t), (obj_s, obj_e, obj_t), score = ent_pair
+                sub_s, sub_e, sub_t = ent_pair[0][:3]
+                obj_s, obj_e, obj_t = ent_pair[1][:3]
+                score = ent_pair[2]
 
                 if len(ids) + 3 <= max_len and score > cur_threshold:  # 当设置 filter_rate 为 0 时，仅包含正确的实体对
                     marker_mask += 1
@@ -206,22 +225,19 @@ class REModel(pl.LightningModule):
         rel_input_ids = rel_input_ids.to(device)
         rel_positional_ids = rel_positional_ids.to(device)
         rel_attention_mask = rel_attention_mask.to(device)
-        assert rel_positional_ids.max() <= 512 and rel_positional_ids.min() >= 0, "positional ids Fault"
+        assert rel_positional_ids.max() <= 512 and rel_positional_ids.min() >= 0, "positional ids error"
         assert rel_input_ids.shape == rel_positional_ids.shape
 
         rel_hidden_states = []
 
-        # 从 triples 中构建标签
-        triple_labels = self.get_triples_label(triples, device, ent_groups, mode=mode, epoch=theta.current_epoch)
-
         if len(ent_groups) != 0:
             # 2. 重新计算 hidden state
             plm_model = theta.plm_model_for_re if self.config.use_two_plm else theta.plm_model
-            plm_model = plm_model.cuda() # 不知道为什么是 CPU，可能是因为 debug mode
             outputs = plm_model(
-                        rel_input_ids,
-                        attention_mask=rel_attention_mask,
-                        position_ids=rel_positional_ids,
+                        rel_input_ids, # torch.Size([8, 607])
+                        attention_mask=rel_attention_mask, # torch.Size([8, 607, 607])
+                        position_ids=rel_positional_ids, # torch.Size([8, 607]),
+                        token_type_ids = torch.zeros(rel_input_ids.shape[:2], dtype=torch.long, device=device),
                         output_hidden_states=True)
             rel_stage_hs = outputs.hidden_states[-1]
 
@@ -241,7 +257,13 @@ class REModel(pl.LightningModule):
                 obj_hs = rel_stage_hs[mask_pos[0], obj_pos_ids]
                 rel_hidden_states += sub_hs - obj_hs
 
-        assert len(ent_groups) == len(rel_hidden_states) == len(triple_labels)
+        if mode != 'predict':
+            triple_labels = self.get_triples_label(triples, device, ent_groups, mode=mode, epoch=theta.current_epoch)
+            assert len(ent_groups) == len(rel_hidden_states) == len(triple_labels)
+
+        else:
+            triple_labels = None
+
         return ent_groups, rel_hidden_states, triple_labels, filter_loss
 
     # def prepare_one_sent(self, theta, batch, hidden_state, entities, mode):
@@ -365,7 +387,7 @@ class REModel(pl.LightningModule):
     #     return mask_hs
 
 
-    def forward(self, theta, batch, hidden_state, entities, return_loss, mode):
+    def forward(self, theta, batch, hidden_state, entities=None, return_loss=False, mode="train", with_score=False):
 
         # if self.config.use_rel_opt1 == "filter":
         #     prepare = self.prepare
@@ -394,7 +416,7 @@ class REModel(pl.LightningModule):
         所体现的是关系抽取和实体过滤工作作用下的结果
         最终的 F1 在 PR 相差不大的情况下，可以理解为 hit_rate * rel_f1
         '''
-        if mode != 'train' and (mode != self.pre_mode or mode == 'test'):
+        if mode != 'train' and mode != 'predict' and (mode != self.pre_mode or mode == 'test'):
             self.filter_score["precision"] = self.hit_count / (self.rel_count + 1e-8)
             self.filter_score["recall"] = self.hit_count / (self.grt_count + 1e-8)
             self.filter_score["f1"] = 2 * self.hit_count / (self.grt_count + self.rel_count + 1e-8)
@@ -413,7 +435,7 @@ class REModel(pl.LightningModule):
             rel_loss = torch.tensor(0.0).to(hidden_state.device)
             return ([],) if not return_loss else ([], rel_loss, filter_loss)
 
-        if theta.graph is not None:
+        if theta.graph is not None and mode != 'predict':
             hidden_output = theta.graph.query_rels(hidden_output)
 
         if self.config.use_rel == 'lmhead':
@@ -427,7 +449,11 @@ class REModel(pl.LightningModule):
         relation_logits = logits.argmax(dim=-1)
         for i in range(len(ent_groups)):
             rel = relation_logits[i].item()
-            triples_pred.append(ent_groups[i] + [rel])
+            if with_score:
+                triples_pred.append(ent_groups[i] + [rel, logits[i]])
+            else:
+                triples_pred.append(ent_groups[i] + [rel])
+
             if relation_logits[i] > 0 and theta.graph:
                 rel_embeddings = hidden_output[i].detach().clone()
                 theta.graph.add_edge(sub=ent_groups[i][0], obj=ent_groups[i][1], rel_type=rel-1, embedding=rel_embeddings)

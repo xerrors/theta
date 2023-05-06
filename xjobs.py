@@ -5,6 +5,7 @@ import random
 import numpy as np
 
 import wandb
+import yaml
 from main import main
 from prettytable import PrettyTable
 
@@ -40,25 +41,26 @@ index = {
 TAG = "Omicron"
 
 # 用于测试的配置
-run_config = dict(
+run_config_test = dict(
     use_thres_val=True,
     # use_filter_hard=True,
     test_from_ckpt=[
-        "output/ouput-2023-04-30_04-54-34-Omicron-ThresT/config.yaml",
-        # "output/ouput-2023-04-30_02-53-32-Omicron-ThresT/config.yaml",
-        # "output/ouput-2023-04-30_00-52-36-Omicron-ThresT/config.yaml",
-        # "output/ouput-2023-04-29_22-52-07-Omicron-ThresT/config.yaml",
-        # "output/ouput-2023-04-29_20-50-49-Omicron-ThresT/config.yaml",
+        "output/ouput-2023-05-01_00-17-42-Omicron-NER-mlp-AttnE/config.yaml",
+        "output/ouput-2023-05-01_03-36-55-Omicron-NER-mlp-AttnE/config.yaml",
+        "output/ouput-2023-05-01_06-47-54-Omicron-NER-mlp/config.yaml",
+        "output/ouput-2023-05-01_10-00-55-Omicron-NER-mlp/config.yaml",
+        "output/ouput-2023-05-02_11-43-11-Omicron-ThresT-NER-mlp-AttnE/config.yaml",
+        "output/ouput-2023-05-02_14-30-16-Omicron-ThresT-NER-mlp/config.yaml"
     ],
     ent_pair_threshold=[0.01, 0.03, 0.05, 0.07],
 )
 
 # 用于训练的配置
-run_config = dict(
-    seed=[100, 7],
-    use_thres_train=True,
+run_config_train = dict(
+    use_thres_train=[True, False],
+    use_ent_attn=[False, True],
     use_ner="mlp",
-    use_ent_attn=[True, False],
+    seed=[500, 400],
 )
 
 # 额外的配置
@@ -91,6 +93,23 @@ def get_all_combinations(run_config):
 
 def refine_config(config, args):
 
+    if args.test_mode:
+        with open(config['test_from_ckpt'], 'r') as f:
+            ckpt_config = yaml.load(f, Loader=yaml.FullLoader)
+            config["tag"] = ckpt_config["tag"]
+
+    else:
+        config["tag"] = TAG
+
+    for key, value in config.items():
+        if key in index:
+            if value is True:
+                config["tag"] += f"-{index[key]}"
+            elif value is False:
+                pass
+            else:
+                config["tag"] += f"-{index[key]}{value}"
+
     config["run_id"] = run_id
 
     if args.fast_dev_run:
@@ -109,9 +128,9 @@ def refine_config(config, args):
     return config
 
 def exec_main(config):
+    # Log
     task_tag_str = cprint.magenta(config['tag'], bold=True)
     cur_time_str = xerrors.cur_time('human')
-    config = refine_config(config, args)
     cprint.info("XJOBS", cur_time_str + "Runing: " + task_tag_str)
     cprint.print_json(config)
 
@@ -156,6 +175,7 @@ def avg_result(result, key_lists):
 def args_parser():
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
+    parser.add_argument("--test-mode", action="store_true", help="Run Test")
     parser.add_argument("--output", type=str, default="output", help="Output directory")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed")
     parser.add_argument("--gpu", type=str, default="not specified")
@@ -169,27 +189,20 @@ if args.gpu == "not specified":
 else:
     GPU = args.gpu
 
+if args.test_mode:
+    run_config = run_config_test
+else:
+    run_config = run_config_train
+
 # 生成所有的组合
 combinations = get_all_combinations(run_config)
 run_configs = run_configs + combinations
 
 results = []
-
 for config in run_configs:
-    config["tag"] = TAG
-    for key, value in config.items():
-        if key in index:
-            if value is True:
-                config["tag"] += f"-{index[key]}"
-            elif value is False:
-                pass
-            else:
-                config["tag"] += f"-{index[key]}{value}"
+    config = refine_config(config, args)
 
-    # result = exec_main(config)
-    result = {
-        "best_f1": random.random(),
-    }
+    result = exec_main(config)
     cprint.print_json(result)
     result["tag"] = config["tag"]
     results.append(result)

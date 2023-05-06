@@ -129,6 +129,85 @@ class Theta(pl.LightningModule):
         self.span_ner = SpanEntityModel(self)
         self.graph = RuntimeGraph(self) if config.use_graph_layers > 0 else None
 
+    def predict_step(self, sent: str, ansser=None):
+        input_ids = self.tokenizer.encode(sent, add_special_tokens=True)
+        input_ids = torch.tensor(input_ids).unsqueeze(0).to(self.device)
+        outputs = self.plm_model(input_ids, output_hidden_states=True) # type: ignore
+
+        # 一些参数
+        hidden_state = outputs.hidden_states[-1]
+
+        ner_logits, _ = self.ner_model(hidden_state, graph=self.graph)
+        entities = self.ner_model.decode_entities(ner_logits, with_score=True)
+
+        batch = [input_ids, None, None, None, None, None, None]
+        if sum([len(e) for e in entities]) > 0:
+            rel_output = self.rel_model(
+                                theta=self,
+                                batch=batch,
+                                hidden_state=hidden_state,
+                                entities=entities,
+                                return_loss=False,
+                                mode="predict",
+                                with_score=True)
+            triples = rel_output[0]
+        else:
+            triples = []
+
+        ents = []
+        for ent in entities[0]:
+            em = self.tokenizer.decode(input_ids[0][ent[0]:ent[1]])
+            ent_type = self.config.dataset.ents[ent[2]]
+            score = ent[3].sigmoid().tolist()
+
+            scores = {}
+            for i, etype in enumerate(['not entity'] + self.config.dataset.ents):
+                scores[etype] = score[i]
+
+            ents.append({
+                "entity text": em,
+                "entity type": ent_type,
+                "confidence":  scores[ent_type],
+                # "scores": scores
+            })
+
+        rels = []
+        for rel in triples:
+            b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t, rel_type, score = rel
+            if rel_type == 0:
+                continue
+
+            sub = self.tokenizer.decode(input_ids[0][sub_s:sub_e])
+            obj = self.tokenizer.decode(input_ids[0][obj_s:obj_e])
+            sub_type = self.config.dataset.ents[sub_t]
+            obj_type = self.config.dataset.ents[obj_t]
+            rel_type = self.config.dataset.rels[rel_type-1]
+            score = score.sigmoid().tolist()
+
+            scores = {}
+            for i, rtype in enumerate(['not relation'] + self.config.dataset.rels):
+                scores[rtype] = score[i]
+
+            rels.append({
+                "subject": {
+                    "text": sub,
+                    "type": sub_type
+                },
+                "object": {
+                    "text": obj,
+                    "type": obj_type
+                },
+                "relation": rel_type,
+                "confidence": scores[rel_type],
+                # "scores": scores
+            })
+
+
+        return {
+            "entities": ents,
+            "relations": rels
+        }
+
 
     def forward(self, batch, mode="train"):
 

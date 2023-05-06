@@ -70,8 +70,13 @@ class NERModel(pl.LightningModule):
 
         return logits, loss
 
-    def decode_entities(self, logits, pos=None):
+    def decode_entities(self, logits, pos=None, with_score=False):
         """return 左闭右开 [[(start, end, type), (...)],[],[(...)]]"""
+
+        ori_logits = logits.clone()
+        if with_score:
+            assert len(logits.shape) == 3 and logits.shape[-1] == len(self.ent_ids)
+
         if len(logits.shape) == 3 and logits.shape[-1] == len(self.ent_ids):
             if self.config.use_crf:
                 logits = torch.tensor(self.crf.decode(logits), device=logits.device)
@@ -94,7 +99,13 @@ class NERModel(pl.LightningModule):
                 # 判断是否是 B 标签
                 if logits[b, i] > 0 and logits[b, i] <= self.num_ent_type:
                     start = True
-                    entity.append([i, i+1, logits[b, i].item()-1])
+                    ent_type_id = logits[b, i].item() - 1
+                    if with_score:
+                        ent_score = ori_logits[b, i]
+                        entity.append([i, i+1, ent_type_id, ent_score])
+                    else:
+                        entity.append([i, i+1, ent_type_id])
+
                 # 判断是否是 I 标签
                 elif logits[b, i] > self.num_ent_type and start:
                     entity[-1][1] = i + 1 # 左闭右开

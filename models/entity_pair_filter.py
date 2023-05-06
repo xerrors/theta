@@ -118,19 +118,20 @@ class FilterModel(pl.LightningModule):
             logits.append(ent_hs_pair)
 
         logits = torch.cat(logits, dim=0)    # (batch_size * ent_num * ent_num,)
-        logits = logits.sigmoid()
+
 
         loss = torch.tensor(0.0, device=logits.device)
         if triples is not None:
             # sub_s, sub_e, obj_s, obj_e, rel_id, sub_type, obj_type
             labels = self.get_filter_label(entities, triples, logits, map_dict)
 
-            loss_fct = nn.BCELoss()
+            loss_fct = nn.BCEWithLogitsLoss()
             loss = loss_fct(logits, labels)
 
             if mode == 'train':
+                logits_sigmoid = logits.sigmoid()
                 # 将 logits > 0.5 的位置置为 1，否则置为 0，然后与 labels 计算 f1
-                pred = torch.where(logits > 0.5, torch.ones_like(logits), torch.zeros_like(logits))
+                pred = torch.where(logits_sigmoid > 0.5, torch.ones_like(logits_sigmoid), torch.zeros_like(logits_sigmoid))
                 self.pred = pred if self.pred is None else torch.cat([self.pred, pred], dim=0)
                 self.labels = labels if self.labels is None else torch.cat([self.labels, labels], dim=0)
 
@@ -146,6 +147,8 @@ class FilterModel(pl.LightningModule):
                 pass
 
         self.pre_mode = mode
+
+        logits = logits.sigmoid()
         return logits, loss, map_dict
 
     def get_draft_ent_groups(self, entities, batch_idx, map_dict, logits, mode):

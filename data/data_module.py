@@ -31,8 +31,12 @@ class DataModule(pl.LightningDataModule):
         if stage == "fit" or stage is None:
             self.data_train = self.__get_dataset("train")
             self.data_val = self.__get_dataset("val")
-        if stage == "test" or stage is None or stage == "predict":
+
+        if stage == "test" or stage is None:
             self.data_test = self.__get_dataset("test")
+
+        if stage == "predict":
+            self.data_test = self.get_dataset_ace_for_predict()
 
     def __get_dataset(self, mode):
         """根据不同的任务类型以及数据集类型使用不同的数据加载方法"""
@@ -70,6 +74,44 @@ class DataModule(pl.LightningDataModule):
             )
 
         return dataset
+    
+    def get_dataset_ace_for_predict(self):
+
+        dataset = Dataset(self.config.dataset["test"])
+        items = []
+        for doc_id, doc in enumerate(dataset): # type: ignore
+
+            doc_text = " ".join([" ".join(sent.text) for sent in doc.sentences])
+
+            for sent in doc.sentences:
+                item = {
+                    "doc": doc_text,
+                    "sent": " ".join(sent.text),
+                }
+                
+                entities = []
+                for ent in sent.ner:
+                    entities.append({
+                        "entity text": " ".join(ent.span.text),
+                        "entity type": ent.label,
+                    })
+
+                relations = []
+                for rel in sent.relations:
+                    relations.append({
+                        "subject": " ".join(rel.pair[0].text),
+                        "object": " ".join(rel.pair[1].text),
+                        "relation": rel.label,
+                    })
+
+                item["entities"] = entities # type: ignore
+                item["relations"] = relations # type: ignore
+
+                if len(relations) > 0:
+                    items.append(item)
+
+
+        return items
 
     def train_dataloader(self):
         shuffle = False if self.config.use_graph_layers > 0 else True
