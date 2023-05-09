@@ -21,6 +21,7 @@ __pycache__
 # ouput
 output
 xerrors
+debug
 
 # jupyter
 test*.ipynb
