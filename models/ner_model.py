@@ -93,7 +93,7 @@ class NERModel(pl.LightningModule):
             if pos is not None:
                 sent_start, sent_end = pos[b,0], pos[b,1]
             else:
-                sent_start, sent_end = 0, seq_len
+                sent_start, sent_end = 1, seq_len - 1
 
             for i in range(sent_start, sent_end):
                 # 判断是否是 B 标签

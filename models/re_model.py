@@ -102,7 +102,7 @@ class REModel(pl.LightningModule):
         if self.config.use_thres_val and mode != 'train':
             assert self.config.ent_pair_threshold >= 0, "ent_pair_threshold must be >= 0"
             cur_threshold = self.config.ent_pair_threshold
-        elif mode != 'train':
+        elif mode != 'train' and mode != "predict":
             cur_threshold = 0.001
 
         if mode != "predict":
@@ -191,7 +191,7 @@ class REModel(pl.LightningModule):
                     pos_ids += [os_pid, ss_pid, os_pid]
                     masks += [marker_mask] * 3
 
-                    ent_groups.append([b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t])
+                    ent_groups.append([b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t, score])
 
             rel_input_ids.append(torch.tensor(ids))
             rel_positional_ids.append(torch.tensor(pos_ids))
@@ -265,6 +265,95 @@ class REModel(pl.LightningModule):
             triple_labels = None
 
         return ent_groups, rel_hidden_states, triple_labels, filter_loss
+
+    def forward(self, theta, batch, hidden_state, entities=None, return_loss=False, mode="train", with_score=False):
+
+        # if self.config.use_rel_opt1 == "filter":
+        #     prepare = self.prepare
+        # elif self.config.use_rel_opt1 == "batch":
+        #     prepare = self.prepare_one_sent
+        # else:
+        #     raise NotImplementedError("use_rel_opt1: {} not implemented".format(self.config.use_rel_opt1))
+
+        # output = prepare(
+        #             theta=theta,
+        #             batch=batch,
+        #             hidden_state=hidden_state,
+        #             entities=entities,
+        #             mode=mode)
+
+        output = self.prepare(
+                    theta=theta,
+                    batch=batch,
+                    hidden_state=hidden_state,
+                    entities=entities,
+                    mode=mode)
+
+
+        '''
+        这里的 hit_rate 是指过滤后，正确的候选实体对与真实实体对的数量之比
+        所体现的是关系抽取和实体过滤工作作用下的结果
+        最终的 F1 在 PR 相差不大的情况下，可以理解为 hit_rate * rel_f1
+        '''
+        if mode != 'train' and mode != 'predict' and (mode != self.pre_mode or mode == 'test'):
+            self.filter_score["precision"] = self.hit_count / (self.rel_count + 1e-8)
+            self.filter_score["recall"] = self.hit_count / (self.grt_count + 1e-8)
+            self.filter_score["f1"] = 2 * self.hit_count / (self.grt_count + self.rel_count + 1e-8)
+            theta.log("info/pair_precision", self.filter_score["precision"])
+            theta.log("info/pair_recall", self.filter_score["recall"])
+            theta.log("info/pair_f1", self.filter_score["f1"])
+            self.hit_count = 0
+            self.grt_count = 0
+            self.rel_count = 0
+
+        self.pre_mode = mode
+
+        ent_groups, hidden_output, triple_labels, filter_loss = output
+
+        if len(hidden_output) == 0:
+            rel_loss = torch.tensor(0.0).to(hidden_state.device)
+            return ([],) if not return_loss else ([], rel_loss, filter_loss)
+
+        if theta.graph is not None and mode != 'predict':
+            hidden_output = theta.graph.query_rels(hidden_output)
+
+        if self.config.use_rel == 'lmhead':
+            assert self.lmhead is not None
+            logits = self.lmhead(hidden_output)
+            logits = logits[..., self.rel_ids] # python Ellipsis operator # BUG
+        else:
+            logits = self.classifier(hidden_output)
+
+        triples_pred = []
+        relation_logits = logits.argmax(dim=-1)
+        for i in range(len(ent_groups)):
+            rel = relation_logits[i].item()
+            if with_score:
+                triples_pred.append(ent_groups[i] + [rel, logits[i]])
+            else:
+                triples_pred.append(ent_groups[i] + [rel])
+
+            if relation_logits[i] > 0 and theta.graph:
+                rel_embeddings = hidden_output[i].detach().clone()
+                theta.graph.add_edge(sub=ent_groups[i][0], obj=ent_groups[i][1], rel_type=rel-1, embedding=rel_embeddings)
+
+        # triples_pred = [ent_groups[i] + [rel] for i in range(len(ent_groups))]
+
+        rel_loss = torch.tensor(0.0).to(logits.device)
+        if triple_labels is not None and return_loss:
+            loss_fct = nn.CrossEntropyLoss(reduction='mean')
+            new_logits = logits.view(-1, len(self.rel_ids))
+            new_labels = triple_labels.view(-1)
+
+            rel_loss = loss_fct(new_logits, new_labels)
+
+            return (triples_pred, rel_loss, filter_loss)
+        
+        if mode == "predict":
+            return (triples_pred, ent_groups)
+
+        return (triples_pred,)
+
 
     # def prepare_one_sent(self, theta, batch, hidden_state, entities, mode):
 
@@ -385,90 +474,3 @@ class REModel(pl.LightningModule):
     #     mask_pos = torch.where(bid == theta.tokenizer.mask_token_id)
     #     mask_hs = rel_stage_hs[mask_pos[0], mask_pos[1]]
     #     return mask_hs
-
-
-    def forward(self, theta, batch, hidden_state, entities=None, return_loss=False, mode="train", with_score=False):
-
-        # if self.config.use_rel_opt1 == "filter":
-        #     prepare = self.prepare
-        # elif self.config.use_rel_opt1 == "batch":
-        #     prepare = self.prepare_one_sent
-        # else:
-        #     raise NotImplementedError("use_rel_opt1: {} not implemented".format(self.config.use_rel_opt1))
-
-        # output = prepare(
-        #             theta=theta,
-        #             batch=batch,
-        #             hidden_state=hidden_state,
-        #             entities=entities,
-        #             mode=mode)
-
-        output = self.prepare(
-                    theta=theta,
-                    batch=batch,
-                    hidden_state=hidden_state,
-                    entities=entities,
-                    mode=mode)
-
-
-        '''
-        这里的 hit_rate 是指过滤后，正确的候选实体对与真实实体对的数量之比
-        所体现的是关系抽取和实体过滤工作作用下的结果
-        最终的 F1 在 PR 相差不大的情况下，可以理解为 hit_rate * rel_f1
-        '''
-        if mode != 'train' and mode != 'predict' and (mode != self.pre_mode or mode == 'test'):
-            self.filter_score["precision"] = self.hit_count / (self.rel_count + 1e-8)
-            self.filter_score["recall"] = self.hit_count / (self.grt_count + 1e-8)
-            self.filter_score["f1"] = 2 * self.hit_count / (self.grt_count + self.rel_count + 1e-8)
-            theta.log("info/pair_precision", self.filter_score["precision"])
-            theta.log("info/pair_recall", self.filter_score["recall"])
-            theta.log("info/pair_f1", self.filter_score["f1"])
-            self.hit_count = 0
-            self.grt_count = 0
-            self.rel_count = 0
-
-        self.pre_mode = mode
-
-        ent_groups, hidden_output, triple_labels, filter_loss = output
-
-        if len(hidden_output) == 0:
-            rel_loss = torch.tensor(0.0).to(hidden_state.device)
-            return ([],) if not return_loss else ([], rel_loss, filter_loss)
-
-        if theta.graph is not None and mode != 'predict':
-            hidden_output = theta.graph.query_rels(hidden_output)
-
-        if self.config.use_rel == 'lmhead':
-            assert self.lmhead is not None
-            logits = self.lmhead(hidden_output)
-            logits = logits[..., self.rel_ids] # python Ellipsis operator # BUG
-        else:
-            logits = self.classifier(hidden_output)
-
-        triples_pred = []
-        relation_logits = logits.argmax(dim=-1)
-        for i in range(len(ent_groups)):
-            rel = relation_logits[i].item()
-            if with_score:
-                triples_pred.append(ent_groups[i] + [rel, logits[i]])
-            else:
-                triples_pred.append(ent_groups[i] + [rel])
-
-            if relation_logits[i] > 0 and theta.graph:
-                rel_embeddings = hidden_output[i].detach().clone()
-                theta.graph.add_edge(sub=ent_groups[i][0], obj=ent_groups[i][1], rel_type=rel-1, embedding=rel_embeddings)
-
-        # triples_pred = [ent_groups[i] + [rel] for i in range(len(ent_groups))]
-
-        rel_loss = torch.tensor(0.0).to(logits.device)
-        if triple_labels is not None and return_loss:
-            loss_fct = nn.CrossEntropyLoss(reduction='mean')
-            new_logits = logits.view(-1, len(self.rel_ids))
-            new_labels = triple_labels.view(-1)
-
-            rel_loss = loss_fct(new_logits, new_labels)
-
-            return (triples_pred, rel_loss, filter_loss)
-
-        return (triples_pred,)
-

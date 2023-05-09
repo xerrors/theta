@@ -69,9 +69,6 @@ def batch_filter(batch, sep_id, pad_id, hidden_state=None):
     f_ent_maps = torch.stack(f_ent_maps, dim=0)
     # f_sent_mask = torch.stack(f_sent_mask, dim=0)
 
-    if hidden_state is not None:
-        f_hidden_state = torch.stack(f_hidden_state, dim=0)
-
     assert f_input_ids.shape == f_attention_mask.shape
 
     f_input_ids = f_input_ids.to(device)
@@ -82,6 +79,7 @@ def batch_filter(batch, sep_id, pad_id, hidden_state=None):
     # f_sent_mask = f_sent_mask.to(device)
 
     if hidden_state is not None:
+        f_hidden_state = torch.stack(f_hidden_state, dim=0)
         f_hidden_state = f_hidden_state.to(device)
         return (f_input_ids, f_attention_mask, f_pos, f_triples, f_ent_maps, f_sent_mask), f_hidden_state
     else:

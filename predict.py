@@ -23,22 +23,23 @@ def seed_every_thing(seed):
 
 class RelationExtractionModel:
 
-    def __init__(self, ckpt_path: str):
+    def __init__(self, ckpt_path: str, gpu: str = "not specified"):
         self.ckpt_path = ckpt_path
+        self.gpu = gpu
         self.load_model() 
         self.load_data()
         
     def load_model(self):
 
         args = setup_parser(func_mode=True, test_from_ckpt=self.ckpt_path)
-        config = Config(args, test_from_ckpt=self.ckpt_path)  # configure logging, save config, gpu etc.
+        config = Config(args, test_from_ckpt=self.ckpt_path, gpu=self.gpu)  # configure logging, save config, gpu etc.
         seed_every_thing(config.seed)
 
         data = DataModule(config)  # The data
         ckpt_model = config.best_model_path
         assert ckpt_model is not None, "No checkpoint model found."
         
-        model = Theta.load_from_checkpoint(ckpt_model, config=config, data=data)
+        model = Theta.load_from_checkpoint(ckpt_model, config=config, data=data) # type: ignore
         model.cuda()
         model.eval()
 
@@ -71,17 +72,10 @@ class RelationExtractionModel:
 if __name__ == "__main__":
 
     model = RelationExtractionModel("output/ouput-2023-05-05_04-11-07-Omicron-AttnE-NER-mlp/config.yaml")
-    cp.success("Predict", "Model loaded.")
-
     item = model.get_instance(16)
     cp.info("Predict", "Instance loaded.")
 
     output = model.predict(item["sent"])
     cp.info("Predict", "Prediction done.")
     cp.print_json(output)
-
-    # Gold
-    triples = []
-    for rel in item["relations"]:
-        triples.append((rel["subject"], rel["object"], rel["relation"]))
-    print("Gold triples:", triples)
+    cp.info("GOLD", item)

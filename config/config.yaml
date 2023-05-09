@@ -7,7 +7,7 @@ tag: default
 
 # INFO: Run
 num_worker: 12
-batch_size: 8 # can be overrided by model.yaml
+batch_size: 4 # can be overrided by model.yaml
 lr: 0.00005
 task_lr: 0.0005
 # decoder_lr: 0.00003

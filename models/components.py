@@ -42,6 +42,7 @@ class SelfAttention(nn.Module):
         
         mask = torch.zeros(input_shape[1], input_shape[1], device=input_device)
         for i in range(input_shape[1]):
+            # mask[i, max(0, i-10):i+10] = 1.0
             mask[i, i-10:i+10] = 1.0
         # mask = mask.unsqueeze(0)
         self.mask = mask
@@ -55,6 +56,7 @@ class SelfAttention(nn.Module):
             attn_mask = self.mask[:x.shape[1], :x.shape[1]].clone()
         else:
             raise ValueError("Mask shape error.")
+        # attn_mask = None
 
         # 执行 self-attention 操作
         attn_output, _ = self.multihead_attn(x, x, x, attn_mask=attn_mask)

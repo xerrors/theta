@@ -2,6 +2,7 @@ from collections import defaultdict
 import os
 import argparse
 import random
+from git import Tree
 import numpy as np
 
 import wandb
@@ -10,7 +11,7 @@ from main import main
 from prettytable import PrettyTable
 
 import xerrors
-from xerrors import cprint
+from xerrors import cprint as cp
 from xerrors.utils import get_gpu_by_user_input
 
 # 根据 run_config 生成所有的组合
@@ -38,29 +39,27 @@ index = {
     "use_ner": "NER-",
 }
 
-TAG = "Omicron"
+TAG = "Omicron-High"
 
 # 用于测试的配置
 run_config_test = dict(
     use_thres_val=True,
     # use_filter_hard=True,
     test_from_ckpt=[
-        "output/ouput-2023-05-01_00-17-42-Omicron-NER-mlp-AttnE/config.yaml",
-        "output/ouput-2023-05-01_03-36-55-Omicron-NER-mlp-AttnE/config.yaml",
-        "output/ouput-2023-05-01_06-47-54-Omicron-NER-mlp/config.yaml",
-        "output/ouput-2023-05-01_10-00-55-Omicron-NER-mlp/config.yaml",
-        "output/ouput-2023-05-02_11-43-11-Omicron-ThresT-NER-mlp-AttnE/config.yaml",
-        "output/ouput-2023-05-02_14-30-16-Omicron-ThresT-NER-mlp/config.yaml"
-    ],
-    ent_pair_threshold=[0.01, 0.03, 0.05, 0.07],
+        "output/ouput-2023-05-09_13-22-14-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml",
+        "output/ouput-2023-05-09_10-15-00-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml",
+        "output/ouput-2023-05-09_07-07-49-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml",
+        "output/ouput-2023-05-09_04-01-02-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml",
+        "output/ouput-2023-05-09_00-54-19-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml"],
+    ent_pair_threshold=[0, 0.01, 0.03, 0.05, 0.07],
 )
 
 # 用于训练的配置
 run_config_train = dict(
-    use_thres_train=[True, False],
-    use_ent_attn=[False, True],
+    use_thres_train=True,
+    use_ent_attn=True,
     use_ner="mlp",
-    seed=[500, 400],
+    seed=[100, 200, 300, 400, 500],
 )
 
 # 额外的配置
@@ -129,10 +128,10 @@ def refine_config(config, args):
 
 def exec_main(config):
     # Log
-    task_tag_str = cprint.magenta(config['tag'], bold=True)
+    task_tag_str = cp.magenta(config['tag'], bold=True)
     cur_time_str = xerrors.cur_time('human')
-    cprint.info("XJOBS", cur_time_str + "Runing: " + task_tag_str)
-    cprint.print_json(config)
+    cp.info("XJOBS", cur_time_str + str("Runing: ") + task_tag_str)
+    cp.print_json(config)
 
     result = {}
 
@@ -141,11 +140,11 @@ def exec_main(config):
         print(config["tag"], "Done!")
 
     except KeyboardInterrupt:
-        cprint.error("XJOBS", "KeyboardInterrupt: Interrupted by user!")
+        cp.error("XJOBS", "KeyboardInterrupt: Interrupted by user!")
         # wandb.finish()
 
     except Exception as e:
-        cprint.error("XJOBS", f"Running Error: {e}, Continue...")
+        cp.error("XJOBS", f"Running Error: {e}, Continue...")
         # wandb.finish()
 
     return result
@@ -203,14 +202,14 @@ for config in run_configs:
     config = refine_config(config, args)
 
     result = exec_main(config)
-    cprint.print_json(result)
+    cp.print_json(result)
     result["tag"] = config["tag"]
     results.append(result)
 
 
 # 打印表格
 cur_time = xerrors.cur_time('human')
-cprint.success("XJOBS", "All Done!" + cur_time)
+cp.success("XJOBS", "All Done!" + cur_time)
 
 table = PrettyTable()
 

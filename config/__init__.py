@@ -48,7 +48,7 @@ class Config(SimpleConfig):
             self.model = SimpleConfig(self.model)
             self.dataset = SimpleConfig(self.dataset)
             self.__load_ext_config()
-            if kwargs.get("gpu") == "not specified":
+            if kwargs.get("gpu") == "not specified" or kwargs.get("gpu") is None:
                 self.gpu = utils.get_gpu_by_user_input()
 
             self.test_from_ckpt = ckpt
