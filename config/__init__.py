@@ -1,6 +1,7 @@
 from argparse import Namespace
 import os
 import time
+import torch
 import yaml
 import json
 import utils
@@ -135,6 +136,11 @@ class Config(SimpleConfig):
         if self.gpu == "not specified":
             self.gpu = utils.get_gpu_by_user_input()
         os.environ['CUDA_VISIBLE_DEVICES'] = self.gpu
+
+        if self.precision == 16:
+            torch.set_float32_matmul_precision('medium')
+        else:
+            torch.set_float32_matmul_precision('high')
 
     def save_best_model_path(self, path):
         self.best_model_path = path

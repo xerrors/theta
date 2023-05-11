@@ -13,12 +13,12 @@ from prettytable import PrettyTable
 import xerrors
 from xerrors import cprint as cp
 from xerrors.utils import get_gpu_by_user_input
+from xerrors.metrics import confidence_interval
 
 # 根据 run_config 生成所有的组合
 run_id = f"RUN_{xerrors.cur_time()}"
 
 # To Test
-
 index = {
     "use_graph_layers": "G",
     "use_two_plm": "PLM2",
@@ -39,34 +39,25 @@ index = {
     "use_ner": "NER-",
 }
 
-TAG = "Omicron-High"
+TAG = "Kappa"
 
 # 用于测试的配置
 run_config_test = dict(
     use_thres_val=True,
     # use_filter_hard=True,
     test_from_ckpt=[
-        "output/ouput-2023-05-09_13-22-14-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml",
-        "output/ouput-2023-05-09_10-15-00-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml",
-        "output/ouput-2023-05-09_07-07-49-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml",
-        "output/ouput-2023-05-09_04-01-02-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml",
-        "output/ouput-2023-05-09_00-54-19-Omicron-High-ThresT-AttnE-NER-mlp/config.yaml"],
-    ent_pair_threshold=[0, 0.01, 0.03, 0.05, 0.07],
+        
+    ],
+    ent_pair_threshold=[0, 0.001, 0.01, 0.03, 0.05, 0.07],
 )
 
 # 用于训练的配置
 run_config_train = dict(
-    use_thres_train=True,
-    use_ent_attn=True,
-    use_ner="mlp",
     seed=[100, 200, 300, 400, 500],
 )
 
 # 额外的配置
 run_configs = [
-    # {
-    #     "use_ent_attn": True
-    # }
 ]
 
 
@@ -149,7 +140,7 @@ def exec_main(config):
 
     return result
 
-def avg_result(result, key_lists):
+def avg_result(result, key_config):
     '''Acg result from multiple runs with same tag'''
     result_list = defaultdict(list)
     for r in result:
@@ -159,10 +150,10 @@ def avg_result(result, key_lists):
     avg_result = []
     for tag, r in result_list.items():
         avg_r = {}
-        for key in key_lists:
-            # 判断是不是数字
+        for key, c in key_config.items():
+            formatter = c["formatter"]
             if isinstance(r[0].get(key, 'N/A'), (int, float)):
-                avg_r[key] = np.mean([i.get(key, 'N/A') for i in r])
+                avg_r[key] = formatter([i[key] for i in r])
             else:
                 avg_r[key] = (r[0].get(key) + f"({len(r)})") if r[0].get(key) else '-'
 
@@ -170,6 +161,14 @@ def avg_result(result, key_lists):
 
     return avg_result
 
+
+def default_formatter(data):
+    mean, h = confidence_interval(data)
+    return f"{mean*100:.2f}"
+
+def conf_formatter(data):
+    mean, h = confidence_interval(data)
+    return f"{mean*100:.2f} ± {h*100:.2f}"
 
 def args_parser():
     parser = argparse.ArgumentParser(add_help=False)
@@ -209,20 +208,32 @@ for config in run_configs:
 
 # 打印表格
 cur_time = xerrors.cur_time('human')
-cp.success("XJOBS", "All Done!" + cur_time)
+cp.success("XJOBS", "All Done! " + cur_time)
 
 table = PrettyTable()
 
-key_lists = ["tag", "test_f1", "test_p", "test_r", "ner_f1", "rel_f1", "best_f1"]
 
-table.field_names = key_lists
-for res in avg_result(results, key_lists):
-    row = []
+def convert_keylist_to_dict(key_lists):
+    key_config = {}
     for key in key_lists:
-        value = res.get(key, 'N/A')
-        if isinstance(value, float):
-            value = f"{value*100:.2f}"
+        if isinstance(key, dict):
+            key_config[key["name"]] = key
+        else:
+            key_config[key] = {
+                "name": key,
+                "formatter": default_formatter
+            }
 
+    return key_config
+
+key_lists = ["tag", {"name": "test_f1", "formatter": conf_formatter}, "test_p", "test_r", "ner_f1", "rel_f1", "best_f1"]
+key_config = convert_keylist_to_dict(key_lists)
+
+table.field_names = key_config.keys()
+for res in avg_result(results, key_config):
+    row = []
+    for key in key_config.keys():
+        value = res.get(key, 'N/A')
         row.append(value)
 
     table.add_row(row)

@@ -12,7 +12,6 @@ import utils
 from data.data_module import DataModule
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-torch.set_float32_matmul_precision('medium')
 
 
 def seed_every_thing(seed):
