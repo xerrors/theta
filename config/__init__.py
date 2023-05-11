@@ -1,5 +1,7 @@
+from argparse import Namespace
 import os
 import time
+import torch
 import yaml
 import json
 import utils
@@ -31,14 +33,29 @@ class SimpleConfig(dict):
 class Config(SimpleConfig):
 
     def __init__(self, args, **kwargs):
+        """初始化配置
 
-        if args.test_from_ckpt:
-            self.load_from_ckpt()
-            self.test_from_ckpt = args.test_from_ckpt
-            self.last_test_time = time.strftime(
-                "%Y-%m-%d_%H-%M-%S", time.localtime())
-            self.test_dir = os.path.join(
-                self.output_dir, f"test-result-{self.last_test_time}")
+        配置的优先级：
+            args < config < ext_config
+        """
+
+        ckpt = args.test_from_ckpt or kwargs.get("test_from_ckpt")
+        if ckpt:
+            self.load_from_ckpt(ckpt) # type: ignore
+            self.wandb = False
+
+            self.ext_config = kwargs
+            self.args = Namespace(**self.formatted_args) # type: ignore
+            self.model = SimpleConfig(self.model)
+            self.dataset = SimpleConfig(self.dataset)
+            self.__load_ext_config()
+            if kwargs.get("gpu") == "not specified" or kwargs.get("gpu") is None:
+                self.gpu = utils.get_gpu_by_user_input()
+
+            self.test_from_ckpt = ckpt
+            self.last_test_time = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
+            self.test_result = os.path.join(self.output_dir, f"test-result-{self.tag}-{self.last_test_time}.json")
+            self.prepare()
             return
 
         self.args = args
@@ -64,7 +81,7 @@ class Config(SimpleConfig):
         self.save_config("config.pre.yaml")
 
         # 创建一个快捷方式，类型是文件夹，指向 output_dir，如果此快捷方式已经存在就删除重新创建快捷方式
-        link = os.path.join(self.output, "latest")
+        link = os.path.join(self.output, "latest") # type: ignore
         # if os.path.exists(link) and os.path.islink(link):
         #     os.remove(link)
 
@@ -82,8 +99,7 @@ class Config(SimpleConfig):
         parsed_config = SimpleConfig(config)
 
         if config_type == "model":
-            model_config = AutoConfig.from_pretrained(
-                parsed_config.model_name_or_path)
+            model_config = AutoConfig.from_pretrained(parsed_config.model_name_or_path) # type: ignore
             parsed_config.update(model_config.to_dict())
 
         return parsed_config
@@ -98,20 +114,19 @@ class Config(SimpleConfig):
 
         # 创建此次实验的基本信息，运行时间，输出路径
         self.start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-        self.output_dir = os.path.join(self.output, f"ouput-{self.start}-{self.tag}")
+        self.output_dir = os.path.join(str(self.output), f"ouput-{self.start}-{self.tag}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         if self.debug and not self.test_from_ckpt:
-            self.output_dir = os.path.join(self.output, "debug", f"{self.start}-{self.tag}")
+            self.output_dir = os.path.join(str(self.output), "debug", f"{self.start}-{self.tag}")
             os.makedirs(self.output_dir, exist_ok=True)
-
-        # 处理参数冲突
-        assert not (self.use_span and self.use_ner), "use_span 和 use_ner 不能同时为 True"
 
         # 快速验证模式
         if self.fast_dev_run:
             self.wandb = False
             print(utils.blue_background(">>> FAST DEV RUN MODE <<<"))
+
+        self.test_result = os.path.join(self.output_dir, f"test-result.json")
 
     def prepare(self):
         # 设置日志等级
@@ -122,6 +137,11 @@ class Config(SimpleConfig):
             self.gpu = utils.get_gpu_by_user_input()
         os.environ['CUDA_VISIBLE_DEVICES'] = self.gpu
 
+        if self.precision == 16:
+            torch.set_float32_matmul_precision('medium')
+        else:
+            torch.set_float32_matmul_precision('high')
+
     def save_best_model_path(self, path):
         self.best_model_path = path
         print(utils.green("Done!"), f"Best model saved at: {path}")
@@ -129,6 +149,7 @@ class Config(SimpleConfig):
     def save_config(self, filename="config.yaml"):
         """将自身的所有属性都保存下来，不包含方法"""
         config = {}
+        self.formatted_args = SimpleConfig(vars(self.args))
         for key, value in self.items():
             if isinstance(value, SimpleConfig):
                 items = {}
@@ -140,8 +161,14 @@ class Config(SimpleConfig):
             elif not key.startswith("__") and not callable(value) and not key == "args":
                 config[key] = value
 
-        with open(os.path.join(self.output_dir, filename), 'w') as f:
+        file_path = os.path.join(self.output_dir, filename)
+        print(utils.green("Done!"), f"Config saved at: {file_path}")
+        with open(file_path, 'w') as f:
             yaml.dump(config, f)
+
+    def save_result(self, result:dict):
+        with open(self.test_result, 'w') as f:
+            json.dump(result, f, indent=4)
 
     def load_from_ckpt(self, ckpt_path):
         # 从 ckpt 中读取
@@ -158,7 +185,10 @@ class Config(SimpleConfig):
     def __replace_config_to_args(self):
 
         # 约定 batch_size
-        self.accumulate_grad_batches = self.global_batch_size // self.batch_size
+        if self.global_batch_size:
+            self.accumulate_grad_batches = self.global_batch_size // self.batch_size
+        else:
+            self.accumulate_grad_batches = 1
 
         for key, value in vars(self.args).items():
             if key in self.keys():

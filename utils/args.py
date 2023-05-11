@@ -4,6 +4,8 @@ import pytorch_lightning as pl
 
 import utils
 
+from xerrors import cprint as cp
+
 
 def setup_parser(func_mode, **kwargs):
     """Set up Python's ArgumentParser with data, model, trainer, and other arguments."""
@@ -13,14 +15,15 @@ def setup_parser(func_mode, **kwargs):
     # More: https://pytorch-lightning.readthedocs.io/en/stable/common/trainer.html
     trainer_parser = pl.Trainer.add_argparse_args(parser)
     trainer_parser._action_groups[1].title = "Trainer Args"  # pylint: disable=protected-access
-    parser = argparse.ArgumentParser(add_help=False, parents=[trainer_parser])
+    parser = argparse.ArgumentParser(add_help=False, parents=[trainer_parser]) # type: ignore
 
     parser.add_argument("--task", type=str, default="ere", choices=["ner", "rc", "ere"])
 
     # Basic arguments
     parser.add_argument("--gpu", type=str, default="not specified")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=100)
     parser.add_argument("--wandb", action="store_true", default=False)
+    parser.add_argument("--offline", action="store_true", default=False)
     parser.add_argument("--output", type=str, default="output")
 
     parser.add_argument("--config", type=str, default="config/config.yaml")
@@ -38,19 +41,14 @@ def setup_parser(func_mode, **kwargs):
 
     parser.add_argument("--test-from-ckpt", type=str, default=None)
 
-    # 测试的时候只需要使用 test_from_ckpt 就行了
-    temp_args, _ = parser.parse_known_args()
-    if temp_args.test_from_ckpt:
-        return parser.parse_args()
 
     # 函数模式，比较特殊，是没有办法使用命令行参数的，所以全部使用默认参数并由 kwargs 更新
     if func_mode:
-        known_args, _ = parser.parse_known_args()
+        known_args = parser.parse_args(args=[])
         default_args = vars(known_args)
         for key, value in kwargs.items():
             if key in default_args and default_args[key] != value:
-                print(f"[{key}]: {default_args[key]} ==> ",
-                      utils.purple(value))
+                print(f"[{key}]: {default_args[key]} ==> ", utils.magenta(value))
                 default_args[key] = value
 
         return known_args

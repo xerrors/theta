@@ -4,6 +4,8 @@ def f1_score(outputs, pred_name, gold_name):
     gold = 0
     correct = 0
 
+    # TODO Shit 使用 Set 会导致分数比别人低，有的 Ground Truth 是重复的，实体也是！！！！
+
     for val_out in outputs:
         pred_triples = set(val_out[pred_name])
         gold_triples = set(val_out[gold_name])

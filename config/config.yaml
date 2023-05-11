@@ -2,50 +2,65 @@ name: Joint Entity Relation Extraction
 
 # INFO: wandb
 wandb: True
-project: theta
+project: Theta
 tag: default
 
 # INFO: Run
 num_worker: 12
-batch_size: 16 # can be overrided by model.yaml
-lr: 0.00003
+batch_size: 4 # can be overrided by model.yaml
+lr: 0.00005
+task_lr: 0.0005
 # decoder_lr: 0.00003
 # Achieved by gradient accumulation
 # accumulate_grad_batches will be set as global_batch_size // batch_size
-global_batch_size: 16
+global_batch_size: 32
 warmup: 0.1
 
 # INFO: Trainer
 max_epochs: 30
 # auto_lr: True
 # fast_dev_run: True
+precision: 16
 
 # INFO: Model
-max_seq_len: 256
+max_seq_len: 500
 model_config: models/configs/bert.yaml # can not be modified in ext_config
 
 # INFO: Dataset
-context_window: 200  # make sure that context_window < max_seq_len
+context_window: 500  # make sure that context_window < max_seq_len
 dataset_config: datasets/ace2005/ace2005.yaml # can not be modified in ext_config
 
 # INFO: sub-task
-use_ner: "lmhead"
-use_rel_cls: "multi_classifier"
-use_independent_plm: False
+use_ner: "mlp"
+use_rel: "lmhead"
+use_two_plm: False
+use_cache: True
 
-mask_token_position: "obj" # experiment result
-use_entity_pair_filter: "attention"
+# Graph
+use_graph_layers: 0
 
-# TODO
-use_less_ner_tag: False
-use_ent_tag_pred_rel: True
-use_dynamic_rel_threshold: False
-ent_pair_threshold: 0
+# loss rate
+ner_rate: 1
+rel_rate: 1
+filter_rate: 1
 
-use_two_stage: True # Set As True
-use_rel_mask: True # Set As True
+# Filter
+use_rel_opt1: "filter"
+use_filter_hard: False
+use_thres_val: False
+use_gold_ent_val: False
+use_gold_filter_val: False
+use_filter_label_enhance: False
 
-# use_ent_corres: "" # deprecated
-# use_rel_maps: "" # deprecated
-use_crf: False # deprecated
-use_span: False # lmhead, multi_classifier
+# 待验证
+use_spert: False # defeat
+# use_spert_opt1: "max" # defeat
+# use_rel_cat: "none" # default none, pure
+# use_crf: False # 目前效果不太行
+# use_dynamic_rel_threshold: True
+ent_pair_threshold: 0.01
+
+# set
+use_ent_pred_rel: "tag"
+use_ent_attn: True
+use_thres_train: True

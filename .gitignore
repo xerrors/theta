@@ -13,12 +13,15 @@ datasets/unified
 # IDE
 .idea
 .vscode
+*.cache
 
 # tmp
 __pycache__
 
 # ouput
 output
+xerrors
+debug
 
 # jupyter
 test*.ipynb

@@ -14,11 +14,15 @@ def get_optimizer(theta, config):
     """
 
     model_lr = config.get("model_lr", config.lr)  # default model_lr = lr
+    task_lr = config.get("task_lr", config.lr)
     decoder_lr = config.get("decoder_lr", config.lr)
 
     optimizer_group_parameters = []
     optimizer_group_parameters.extend(get_params(theta, name="plm_model", lr=model_lr))
-    optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=["plm_model"]))
+    optimizer_group_parameters.extend(get_params(theta, name="filter", lr=task_lr))
+    optimizer_group_parameters.extend(get_params(theta, name="span_ner", lr=task_lr))
+    optimizer_group_parameters.extend(get_params(theta, name="ner_model", lr=task_lr))
+    optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=["plm_model", "filter", "span_ner", "ner_model"]))
 
     optimizer = AdamW(optimizer_group_parameters, lr=config.lr, eps=1e-8)
 

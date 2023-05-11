@@ -7,5 +7,5 @@ def safe_list_get(l, idx, default=None):
 
 import math
 def cosine_ease_in_out_minmax(cur, max_step):
-    x = min(cur / max_step, 1)
+    x = min(cur / (max_step + 1e-8), 1)
     return 0.5 * (1 - math.cos(x * math.pi))
