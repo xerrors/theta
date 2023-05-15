@@ -84,6 +84,7 @@ def main(func_mode=False, **kwargs):
         "rel_f1": theta.rel_f1,
         "rel_p": theta.rel_p,
         "rel_r": theta.rel_r,
+        "final_config": config.final_config
     }
 
     config.save_result(result)

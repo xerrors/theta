@@ -2,10 +2,10 @@ from collections import defaultdict
 import os
 import argparse
 import random
-from git import Tree
 import numpy as np
 
 import wandb
+import traceback
 import yaml
 from main import main
 from prettytable import PrettyTable
@@ -37,30 +37,41 @@ index = {
     "use_spert": "SpERT",
     "na_ner_weight": "NaW-",
     "use_ner": "NER-",
+    "use_thres_plus": "ThresT+"
 }
 
-TAG = "Kappa"
+TAG = "Kappa-NoFilter"
 
-# 用于测试的配置
+# 用于测试的配置 ===================================
 run_config_test = dict(
     use_thres_val=True,
-    # use_filter_hard=True,
     test_from_ckpt=[
-        
+        "output/ouput-2023-05-12_00-46-23-Kappa-E-ThresT+/config.yaml","output/ouput-2023-05-11_22-02-45-Kappa-E-ThresT+/config.yaml","output/ouput-2023-05-11_19-19-01-Kappa-E-ThresT+/config.yaml","output/ouput-2023-05-11_16-35-28-Kappa-E-ThresT+/config.yaml","output/ouput-2023-05-11_13-51-12-Kappa-E-ThresT+/config.yaml",
+        "output/ouput-2023-05-12_00-51-34-Kappa-E/config.yaml","output/ouput-2023-05-11_22-06-52-Kappa-E/config.yaml","output/ouput-2023-05-11_19-20-09-Kappa-E/config.yaml","output/ouput-2023-05-11_16-36-17-Kappa-E/config.yaml","output/ouput-2023-05-11_13-51-40-Kappa-E/config.yaml",
+        "output/ouput-2023-05-13_00-50-15-Kappa-ThresT+/config.yaml","output/ouput-2023-05-12_21-59-11-Kappa-ThresT+/config.yaml","output/ouput-2023-05-12_19-10-23-Kappa-ThresT+/config.yaml","output/ouput-2023-05-12_16-23-04-Kappa-ThresT+/config.yaml","output/ouput-2023-05-12_13-27-01-Kappa-ThresT+/config.yaml",
     ],
     ent_pair_threshold=[0, 0.001, 0.01, 0.03, 0.05, 0.07],
 )
 
-# 用于训练的配置
+# 用于训练的配置 ====================================
 run_config_train = dict(
+    use_thres_train=False,
+    use_thres_val=False,
+    filter_rate=0,
+    use_filter=False,
     seed=[100, 200, 300, 400, 500],
 )
 
-# 额外的配置
+# Queue ============================================
+# use_rel="mlp"
+
+
+# 额外的配置 ========================================
 run_configs = [
 ]
 
 
+# ==================================================
 def get_all_combinations(run_config):
 
     if len(run_config) == 0:
@@ -135,6 +146,7 @@ def exec_main(config):
         # wandb.finish()
 
     except Exception as e:
+        cp.error("XJOBS", traceback.format_exc())
         cp.error("XJOBS", f"Running Error: {e}, Continue...")
         # wandb.finish()
 
@@ -204,6 +216,8 @@ for config in run_configs:
     cp.print_json(result)
     result["tag"] = config["tag"]
     results.append(result)
+
+print([result.get("final_config") for result in results])
 
 
 # 打印表格

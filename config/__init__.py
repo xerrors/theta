@@ -162,9 +162,11 @@ class Config(SimpleConfig):
                 config[key] = value
 
         file_path = os.path.join(self.output_dir, filename)
-        print(utils.green("Done!"), f"Config saved at: {file_path}")
+        # print(utils.green("Done!"), f"Config saved at: {file_path}")
         with open(file_path, 'w') as f:
             yaml.dump(config, f)
+
+        self.final_config = file_path
 
     def save_result(self, result:dict):
         with open(self.test_result, 'w') as f:
