@@ -73,12 +73,13 @@ def get_params(model, name, lr, exclude=[], added_list=[]):
         and (with_decay ^ any(pram_name in full_name for pram_name in no_decay_param))
 
     # 控制台输出信息（仅仅是为了方便查看）
-    params_info = ""
-    for n, p in model.named_parameters():
-        if filter(n, p, True) and ".encoder.layer" not in n:
-            params_info += f"\n- {n}, {list(p.size())}"
-    if params_info != "":
-        print(f"\nParameters (execpt encoder.layer) LR: {lr:.2e}{params_info}")
+    if model.config.debug:
+        params_info = ""
+        for n, p in model.named_parameters():
+            if filter(n, p, True) and ".encoder.layer" not in n:
+                params_info += f"\n- {n}, {list(p.size())}"
+        if params_info != "":
+            print(f"\nParameters (execpt encoder.layer) LR: {lr:.2e}{params_info}")
 
     # 排除 weight_decay
     with_decay = [p for n, p in model.named_parameters() if filter(n, p, True)]
