@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import pytorch_lightning as pl
 
+from xerrors import debug
 from models.components import MultiNonLinearClassifier
 from sklearn.metrics import f1_score, precision_score, recall_score
 
@@ -14,12 +15,18 @@ class FilterModel(pl.LightningModule):
     def __init__(self, theta) -> None:
         super().__init__()
         self.config = theta.config
+        self.enable = self.config.use_filter and self.config.filter_rate > 0
         self.log = theta.log
         self.pre_mode = None
         self.pred = None
         self.labels = None
+        self.pred_val = None
+        self.labels_val = None
 
-        self.filter_entity_pair_net = MultiNonLinearClassifier(self.config.model.hidden_size * 2, 1, layers_num=2)
+        self.filter_entity_pair_net = MultiNonLinearClassifier(
+            self.config.model.hidden_size * 2, 
+            tag_size=1, 
+            layers_num=2)
 
         self.sub_proj = nn.Linear(self.config.model.hidden_size, self.config.model.hidden_size)
         self.obj_proj = nn.Linear(self.config.model.hidden_size, self.config.model.hidden_size)
@@ -62,7 +69,10 @@ class FilterModel(pl.LightningModule):
         logits = []
         map_dict = {}
 
-        hidden_state = self.dropout(hidden_state)
+        if self.config.use_filter_opt2 == "detach":
+            hidden_state = hidden_state.detach()
+        else:
+            hidden_state = self.dropout(hidden_state)
 
         for i in range(len(entities)):
             if len(entities[i]) == 0: continue
@@ -128,44 +138,59 @@ class FilterModel(pl.LightningModule):
             loss_fct = nn.BCEWithLogitsLoss()
             loss = loss_fct(logits, labels)
 
-            if mode == 'train':
+            if mode != "predict":
                 logits_sigmoid = logits.sigmoid()
                 # 将 logits > 0.5 的位置置为 1，否则置为 0，然后与 labels 计算 f1
                 pred = torch.where(logits_sigmoid > 0.5, torch.ones_like(logits_sigmoid), torch.zeros_like(logits_sigmoid))
+
+
+            if mode == 'train':
                 self.pred = pred if self.pred is None else torch.cat([self.pred, pred], dim=0)
                 self.labels = labels if self.labels is None else torch.cat([self.labels, labels], dim=0)
-
-            elif self.pre_mode == 'train' and self.pred is not None and self.labels is not None:
-                labels = self.labels.cpu().numpy()
-                pred = self.pred.cpu().numpy()
-                self.log("info/filter_f1", float(f1_score(labels, pred, zero_division=0)))
-                self.log("info/filter_precision", float(precision_score(labels, pred, zero_division=0)))
-                self.log("info/filter_recall", float(recall_score(labels, pred, zero_division=0)))
-                self.pred = None
-                self.labels = None
-            else:
-                pass
+            elif mode == "dev" or mode == "test":
+                self.pred_val = pred if self.pred_val is None else torch.cat([self.pred_val, pred], dim=0)
+                self.labels_val = labels if self.labels_val is None else torch.cat([self.labels_val, labels], dim=0)
 
         self.pre_mode = mode
 
         logits = logits.sigmoid()
         return logits, loss, map_dict
 
-    def get_draft_ent_groups(self, entities, batch_idx, map_dict, logits, mode):
-        '''Get the draft entity groups for each entity in the batch.
+    def log_filter_train_metrics(self):
+        if self.pred is not None and self.labels is not None:
+            labels = self.labels.cpu().numpy()
+            pred = self.pred.cpu().numpy()
+            self.log("info/filter_f1", float(f1_score(labels, pred, zero_division=0)))
+            self.log("info/filter_precision", float(precision_score(labels, pred, zero_division=0)))
+            self.log("info/filter_recall", float(recall_score(labels, pred, zero_division=0)))
+            self.pred = None
+            self.labels = None
+            debug.log(self.config.debug, float(f1_score(labels, pred, zero_division=0)))
 
-        Args:
-            entities (list): list of entities in the batch
-            batch_idx (int): batch index
-            map_dict (dict): map dict
-            sort (str, optional): sort method as "score", "gold". Defaults to "score".
-        '''
+
+    def log_filter_val_metrics(self):
+        if self.pred_val is not None and self.labels_val is not None:
+            labels = self.labels_val.cpu().numpy()
+            pred = self.pred_val.cpu().numpy()
+            self.log("info/filter_f1_val", float(f1_score(labels, pred, zero_division=0)))
+            self.log("info/filter_precision_val", float(precision_score(labels, pred, zero_division=0)))
+            self.log("info/filter_recall_val", float(recall_score(labels, pred, zero_division=0)))
+            self.pred_val = None
+            self.labels_val = None
+            debug.log(self.config.debug, float(f1_score(labels, pred, zero_division=0)))
+
+
+    def get_draft_ent_groups(self, entities, batch_idx, map_dict, logits, mode, pred=None):
+        '''Get the draft entity groups for each entity in the batch.'''
 
         ent_groups = []
 
         pairs = list(itertools.permutations(entities[batch_idx], 2))
         if len(pairs) > 0:
-            random.shuffle(pairs)
+
+            # some tricks
+            if self.enable:
+                random.shuffle(pairs)
 
             for sub_pos, obj_pos in pairs:
                 i = map_dict[(batch_idx, sub_pos[0])]
@@ -180,8 +205,19 @@ class FilterModel(pl.LightningModule):
                     if self.hard_filter_table[sub_type, obj_type] == 0:
                         continue
 
-                ent_groups.append((sub_pos, obj_pos, score))
-            ent_groups = sorted(ent_groups, key=lambda a : a[-1], reverse=True)
+                if pred is not None:
+                    pred_score = pred[index].item()
+                    ent_groups.append((sub_pos, obj_pos, score, pred_score))
+
+                else:
+                    ent_groups.append((sub_pos, obj_pos, score))
+
+            if pred is not None:
+                ent_groups = sorted(ent_groups, key=lambda a : (a[2], a[3]), reverse=True)
+                ent_groups = [g[:3] for g in ent_groups]
+
+            else:
+                ent_groups = sorted(ent_groups, key=lambda a : a[2], reverse=True)
 
         return ent_groups
 
