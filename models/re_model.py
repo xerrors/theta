@@ -29,6 +29,9 @@ class REModel(pl.LightningModule):
         elif config.use_rel == 'linear':
             self.classifier = nn.Linear(hidden_size, len(self.rel_ids))
 
+        elif config.use_rel == 'mlp':
+            self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
+
         else:
             self.classifier = MultiNonLinearClassifier(hidden_size, len(self.rel_ids))
 
@@ -99,11 +102,12 @@ class REModel(pl.LightningModule):
         # 如果启用 use_thres_val，则验证阶段使用的都是置信度高的实体对
         # 暂时使用 calc_num_training_steps 来反复计算，如果后面正式效果可行，再优化这部分的代码
         cur_threshold = -1
-        if self.config.use_thres_val and mode != 'train':
-            assert self.config.ent_pair_threshold >= 0, "ent_pair_threshold must be >= 0"
-            cur_threshold = self.config.ent_pair_threshold
-        elif mode != 'train' and mode != "predict":
-            cur_threshold = 0.001
+        if self.config.use_filter and mode != 'train':
+            if self.config.use_thres_val:
+                assert self.config.ent_pair_threshold >= 0, "ent_pair_threshold must be >= 0"
+                cur_threshold = self.config.ent_pair_threshold
+            elif mode != "predict":
+                cur_threshold = 0.001  # default validation threshold
 
         if mode != "predict":
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
@@ -117,6 +121,7 @@ class REModel(pl.LightningModule):
         rel_input_ids = []
         rel_positional_ids = []
         rel_attention_mask = []
+        ent_hidden_states = []
 
         cls_token = theta.tokenizer.cls_token_id
         sep_token = theta.tokenizer.sep_token_id
@@ -147,16 +152,22 @@ class REModel(pl.LightningModule):
 
             # 先构建一个初始的实体组，然后按照置信度排序，能排多少是多少
             if mode != "predict":
-                gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode)
                 pred_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
+                gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode, pred=logits if self.config.use_thres_plus else None)
 
                 # 如果当前的 epoch 大于最大的 epochs 的 1/3 的时候，就开始使用阈值过滤
                 count = len(gold_draft_ent_groups)
                 if self.config.use_thres_train and mode == "train":
                     r = self.filter_score.get("recall", 0)
                     pred_count = len([1 for e in pred_draft_ent_groups if e[-1] > 0.5]) # use 0.1 as threshold TODO
-                    # c = max(\theta, c - c * r + \hat{c} * r)
-                    count = max(5, int(count - count * r + pred_count * 2 * r))
+                    l = 2
+                    ent_count = len(entity)
+                    # 2023-0510
+                    count = max(5, int(count - count * r + pred_count * l * r))
+                    # 2023-0511
+                    # count = max(5, int(count * (1 - r) + (l + (1 - l) * r) * r * pred_count))
+                    # 2023-0513
+                    # count = max(ent_count, int(count * (1-r) + l*pred_count * r))
 
                 if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
                     draft_ent_groups = gold_draft_ent_groups[:count]
@@ -190,6 +201,9 @@ class REModel(pl.LightningModule):
                     ids += [mask_token, ss_tid, os_tid]
                     pos_ids += [os_pid, ss_pid, os_pid]
                     masks += [marker_mask] * 3
+
+                    # ent_hidden_states.append([hidden_state[b, sub_s:sub_e].max(dim=0)[0], hidden_state[b, obj_s:obj_e].max(dim=0)[0]]) # 最大池化
+                    ent_hidden_states.append(torch.stack([hidden_state[b, sub_s], hidden_state[b, obj_s]])) # 取第一个 token
 
                     ent_groups.append([b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t, score])
 
@@ -231,6 +245,9 @@ class REModel(pl.LightningModule):
         rel_hidden_states = []
 
         if len(ent_groups) != 0:
+            # 1. ent hidden state
+            ent_hidden_states = torch.stack(ent_hidden_states) # [ent_num, 2, hidden_size]
+
             # 2. 重新计算 hidden state
             plm_model = theta.plm_model_for_re if self.config.use_two_plm else theta.plm_model
             outputs = plm_model(
@@ -246,16 +263,32 @@ class REModel(pl.LightningModule):
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
 
             if self.config.use_ent_pred_rel == "tag":
+                sub_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+                obj_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
+    
+            elif self.config.use_ent_pred_rel == "embed":
                 sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
                 obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
-                rel_hidden_states += sub_tag_hs - obj_tag_hs
-
-            elif self.config.use_ent_pred_rel == "embed":
                 sub_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
                 obj_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
                 sub_hs = rel_stage_hs[mask_pos[0], sub_pos_ids]
                 obj_hs = rel_stage_hs[mask_pos[0], obj_pos_ids]
-                rel_hidden_states += sub_hs - obj_hs
+                sub_hs += sub_tag_hs
+                obj_hs += obj_tag_hs
+
+            elif self.config.use_ent_pred_rel == "embed2":
+                sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+                obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
+                sub_hs = ent_hidden_states[:, 0, :] + sub_tag_hs
+                obj_hs = ent_hidden_states[:, 1, :] + obj_tag_hs
+
+            else:
+                raise NotImplementedError("use_ent_pred_rel: {} not implemented".format(self.config.use_ent_pred_rel))
+
+            if self.config.use_rel == 'mlp':
+                rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
+            else:
+                rel_hidden_states += obj_hs - sub_hs
 
         if mode != 'predict':
             triple_labels = self.get_triples_label(triples, device, ent_groups, mode=mode, epoch=theta.current_epoch)

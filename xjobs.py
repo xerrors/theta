@@ -22,6 +22,8 @@ run_id = f"RUN_{xerrors.cur_time()}"
 index = {
     "use_graph_layers": "G",
     "use_two_plm": "PLM2",
+    "use_rel": "Rel-",
+    "use_ent_pred_rel": "EntFeature-",
     "use_rel_opt1": "F-", # filter, batch
     "use_gold_ent_val": "GoldEnt",
     "use_gold_filter_val": "GoldFilter",
@@ -30,6 +32,7 @@ index = {
     "use_thres_val": "ThresV",
     "max_epochs": "E",
     "use_filter_opt1": "Fopt1-",
+    "use_filter_opt2": "Fopt2-",
     "use_filter_label_enhance": "LabelEn",
     "use_ent_hidden_state": "EntHid-", # head, mean, max
     "use_ent_attn": "AttnE",
@@ -37,28 +40,27 @@ index = {
     "use_spert": "SpERT",
     "na_ner_weight": "NaW-",
     "use_ner": "NER-",
-    "use_thres_plus": "ThresT+"
+    "use_thres_plus": "ThresT+",
+    "context_window": "CW-",
+    "precision": "P",
+    "task_lr": "LR2-",
 }
 
-TAG = "Kappa-NoFilter"
+TAG = "Kappa"
 
 # 用于测试的配置 ===================================
 run_config_test = dict(
     use_thres_val=True,
-    test_from_ckpt=[
-        "output/ouput-2023-05-12_00-46-23-Kappa-E-ThresT+/config.yaml","output/ouput-2023-05-11_22-02-45-Kappa-E-ThresT+/config.yaml","output/ouput-2023-05-11_19-19-01-Kappa-E-ThresT+/config.yaml","output/ouput-2023-05-11_16-35-28-Kappa-E-ThresT+/config.yaml","output/ouput-2023-05-11_13-51-12-Kappa-E-ThresT+/config.yaml",
-        "output/ouput-2023-05-12_00-51-34-Kappa-E/config.yaml","output/ouput-2023-05-11_22-06-52-Kappa-E/config.yaml","output/ouput-2023-05-11_19-20-09-Kappa-E/config.yaml","output/ouput-2023-05-11_16-36-17-Kappa-E/config.yaml","output/ouput-2023-05-11_13-51-40-Kappa-E/config.yaml",
-        "output/ouput-2023-05-13_00-50-15-Kappa-ThresT+/config.yaml","output/ouput-2023-05-12_21-59-11-Kappa-ThresT+/config.yaml","output/ouput-2023-05-12_19-10-23-Kappa-ThresT+/config.yaml","output/ouput-2023-05-12_16-23-04-Kappa-ThresT+/config.yaml","output/ouput-2023-05-12_13-27-01-Kappa-ThresT+/config.yaml",
-    ],
+    test_from_ckpt=['output/ouput-2023-05-23_17-03-13-Kappa-Rel-lmhead-EntFeature-embed2/config.yaml', 'output/ouput-2023-05-23_19-56-32-Kappa-Rel-mlp-EntFeature-embed2/config.yaml', 'output/ouput-2023-05-23_22-49-56-Kappa-Rel-lmhead-EntFeature-embed2/config.yaml', 'output/ouput-2023-05-24_01-43-51-Kappa-Rel-mlp-EntFeature-embed2/config.yaml', 'output/ouput-2023-05-24_04-33-39-Kappa-Rel-lmhead-EntFeature-embed2/config.yaml', 'output/ouput-2023-05-24_07-22-37-Kappa-Rel-mlp-EntFeature-embed2/config.yaml', 'output/ouput-2023-05-24_10-11-18-Kappa-Rel-lmhead-EntFeature-embed2/config.yaml', 'output/ouput-2023-05-24_13-02-45-Kappa-Rel-mlp-EntFeature-embed2/config.yaml', 'output/ouput-2023-05-24_15-52-59-Kappa-Rel-lmhead-EntFeature-embed2/config.yaml', 'output/ouput-2023-05-24_18-43-18-Kappa-Rel-mlp-EntFeature-embed2/config.yaml'],
     ent_pair_threshold=[0, 0.001, 0.01, 0.03, 0.05, 0.07],
 )
 
 # 用于训练的配置 ====================================
 run_config_train = dict(
-    use_thres_train=False,
-    use_thres_val=False,
-    filter_rate=0,
-    use_filter=False,
+    # task_lr=[5e-3, 5e-5],
+    # use_rel=["lmhead", "mlp"],
+    use_thres_plus=True,
+    use_ent_pred_rel="embed2",
     seed=[100, 200, 300, 400, 500],
 )
 
@@ -68,6 +70,9 @@ run_config_train = dict(
 
 # 额外的配置 ========================================
 run_configs = [
+    # {
+    #     "use_cache": False,
+    # }
 ]
 
 
@@ -184,8 +189,8 @@ def conf_formatter(data):
 
 def args_parser():
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--fast-dev-run", action="store_true", help="Fast dev run")
-    parser.add_argument("--test-mode", action="store_true", help="Run Test")
+    parser.add_argument("-F", "--fast-dev-run", action="store_true", help="Fast dev run")
+    parser.add_argument("-T", "--test-mode", action="store_true", help="Run Test")
     parser.add_argument("--output", type=str, default="output", help="Output directory")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed")
     parser.add_argument("--gpu", type=str, default="not specified")
@@ -200,13 +205,11 @@ else:
     GPU = args.gpu
 
 if args.test_mode:
-    run_config = run_config_test
+    run_configs = get_all_combinations(run_config_test)
 else:
-    run_config = run_config_train
+    combinations = get_all_combinations(run_config_train)
+    run_configs = run_configs + combinations
 
-# 生成所有的组合
-combinations = get_all_combinations(run_config)
-run_configs = run_configs + combinations
 
 results = []
 for config in run_configs:

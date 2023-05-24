@@ -21,6 +21,7 @@ max_epochs: 30
 # auto_lr: True
 # fast_dev_run: True
 precision: 16
+reload_dataloaders_every_epoch: True
 
 # INFO: Model
 max_seq_len: 500
