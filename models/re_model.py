@@ -164,10 +164,14 @@ class REModel(pl.LightningModule):
                     ent_count = len(entity)
                     # 2023-0510
                     count = max(5, int(count - count * r + pred_count * l * r))
-                    # 2023-0511
-                    # count = max(5, int(count * (1 - r) + (l + (1 - l) * r) * r * pred_count))
-                    # 2023-0513
-                    # count = max(ent_count, int(count * (1-r) + l*pred_count * r))
+
+                    opt3 = self.config.use_filter_opt3
+                    if opt3 == "0511":
+                        count = max(5, int(count * (1 - r) + (l + (1 - l) * r) * r * pred_count))
+                    elif opt3 == "0513":
+                        count = max(ent_count, int(count * (1-r) + l * pred_count * r))
+                    elif opt3 == "0524":
+                        count = max(ent_count, int(count - count * r + pred_count * 1.5 * r))
 
                 if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
                     draft_ent_groups = gold_draft_ent_groups[:count]
