@@ -18,6 +18,23 @@ def f1_score(outputs, pred_name, gold_name):
     f1 = 2 * precision * recall / (precision + recall + 1e-8)
     return f1, precision, recall
 
+def f1_score_simple(labels, pred, ignore_index=0):
+    # labels = [0, 2, 1, 3, 2, 1, 0, 0, 1]
+    # pred = [0, 2, 0, 3, 1, 0, 1, 4, 1]
+
+    gold_count = sum(labels != 0)
+    pred_count = sum(pred != 0)
+
+    zero = sum((labels | pred) == 0)
+    correct = sum(labels == pred) - zero
+
+    precision = correct / (pred_count + 1e-8)
+    recall = correct / (gold_count + 1e-8)
+    f1 = 2 * precision * recall / (precision + recall + 1e-8)
+    return f1, precision, recall
+    
+
+
 
 # def f1_score(outputs, consider_conf=True, threshold=0.5):
 #     """计算 F1 分数

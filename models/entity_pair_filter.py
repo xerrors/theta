@@ -4,6 +4,7 @@ import random
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
+from utils.metrics import f1_score_simple
 
 from xerrors import debug
 from models.components import MultiNonLinearClassifier
@@ -17,22 +18,37 @@ class FilterModel(pl.LightningModule):
         self.config = theta.config
         self.enable = self.config.use_filter and self.config.filter_rate > 0
         self.log = theta.log
-        self.pre_mode = None
+        # self.pre_mode = None
         self.pred = None
         self.labels = None
         self.pred_val = None
         self.labels_val = None
 
-        self.filter_entity_pair_net = MultiNonLinearClassifier(
-            self.config.model.hidden_size * 2, 
-            tag_size=1, 
-            layers_num=2)
+        attention_out_dim = int(self.config.model.hidden_size * float(self.config.get("use_filter_opt4", 1.0)))
+        self.tag_size = len(self.config.dataset.rels) + 1 if self.config.use_filter_opt1 == "concat_pro" else 1
 
-        self.sub_proj = nn.Linear(self.config.model.hidden_size, self.config.model.hidden_size)
-        self.obj_proj = nn.Linear(self.config.model.hidden_size, self.config.model.hidden_size)
+        self.sub_proj = nn.Linear(self.config.model.hidden_size, attention_out_dim)
+        self.obj_proj = nn.Linear(self.config.model.hidden_size, attention_out_dim)
+
+        self.filter_entity_pair_net = MultiNonLinearClassifier(
+            attention_out_dim * 2, 
+            tag_size=self.tag_size)
 
         self.hard_filter_table = torch.load("datasets/ace2005/ent_rel_corres.data").sum(dim=-1)
         self.dropout = nn.Dropout(0.1)
+
+        # metrics
+        self.train_metrics = {
+            "f1": 0,
+            "precision": 0,
+            "recall": 0,
+        }
+
+        self.val_metrics = {
+            "f1": 0,
+            "precision": 0,
+            "recall": 0,
+        }
 
     def convert_bij_to_index(self, bij, entities):
         """找到 batch i 中的第 i 个实体和第 j 个实体在 logits 里面的位置
@@ -48,7 +64,7 @@ class FilterModel(pl.LightningModule):
         return index
 
     def get_filter_label(self, entities, triples, logits, map_dict):
-        labels = torch.zeros_like(logits)
+        labels = torch.zeros(logits.shape[0], dtype=torch.long, device=logits.device)
         for b, triple in enumerate(triples):
             for t in triple:
                 if t[0] == -1:
@@ -58,7 +74,7 @@ class FilterModel(pl.LightningModule):
                 if i is None or j is None:
                     continue
                 index = self.convert_bij_to_index((b,i,j), entities)
-                labels[index] = 1
+                labels[index] = t[4] + 1 if self.config.use_filter_opt1 == "concat_pro" else 1 
                 if self.config.use_filter_label_enhance:
                     index = self.convert_bij_to_index((b,j,i), entities)
                     labels[index] = 1
@@ -103,27 +119,16 @@ class FilterModel(pl.LightningModule):
             if not self.config.use_filter_opt1 or self.config.use_filter_opt1 == "attention":
                 ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-2, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
 
-            elif self.config.use_filter_opt1 == "attention_softmax":
-                ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-2, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
-                ent_hs_pair = ent_hs_pair.softmax(dim=-1)
-
-            elif self.config.use_filter_opt1 == "concat":
+            elif self.config.use_filter_opt1 == "concat" or self.config.use_filter_opt1 == "concat_pro":
                 ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
                 ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
                 ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)    # (ent_num, ent_num, hidden_size * 2)
                 ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
 
-            elif self.config.use_filter_opt1 == "concat_softmax":
-                ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
-                ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
-                ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)
-                ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
-                ent_hs_pair = ent_hs_pair.softmax(dim=-1)
-
             else:
-                raise ValueError("use_filter_opt1 must be in [None, 'attention', 'attention_softmax', 'concat', 'concat_softmax']")
+                raise ValueError("use_filter_opt1 must be in [None, 'attention', 'concat', 'concat_pro']")
 
-            ent_hs_pair = ent_hs_pair.view(-1, 1).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
+            ent_hs_pair = ent_hs_pair.view(-1, self.tag_size).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
 
             logits.append(ent_hs_pair)
 
@@ -135,14 +140,16 @@ class FilterModel(pl.LightningModule):
             # sub_s, sub_e, obj_s, obj_e, rel_id, sub_type, obj_type
             labels = self.get_filter_label(entities, triples, logits, map_dict)
 
-            loss_fct = nn.BCEWithLogitsLoss()
-            loss = loss_fct(logits, labels)
-
-            if mode != "predict":
+            if self.config.use_filter_opt1 == "concat_pro":
+                loss_fct = nn.CrossEntropyLoss()
+                loss = loss_fct(logits, labels.long())
+                pred = torch.argmax(logits, dim=-1)
+            
+            else: # Default
+                loss_fct = nn.BCEWithLogitsLoss()
+                loss = loss_fct(logits, labels)
                 logits_sigmoid = logits.sigmoid()
-                # 将 logits > 0.5 的位置置为 1，否则置为 0，然后与 labels 计算 f1
                 pred = torch.where(logits_sigmoid > 0.5, torch.ones_like(logits_sigmoid), torch.zeros_like(logits_sigmoid))
-
 
             if mode == 'train':
                 self.pred = pred if self.pred is None else torch.cat([self.pred, pred], dim=0)
@@ -151,33 +158,60 @@ class FilterModel(pl.LightningModule):
                 self.pred_val = pred if self.pred_val is None else torch.cat([self.pred_val, pred], dim=0)
                 self.labels_val = labels if self.labels_val is None else torch.cat([self.labels_val, labels], dim=0)
 
-        self.pre_mode = mode
+        # self.pre_mode = mode
+        if self.config.use_filter_opt1 == "concat_pro":
+            logits = logits.softmax(dim=-1)[:, 1:].sum(dim=-1)
+        else:
+            logits = logits.sigmoid()
 
-        logits = logits.sigmoid()
         return logits, loss, map_dict
 
     def log_filter_train_metrics(self):
         if self.pred is not None and self.labels is not None:
             labels = self.labels.cpu().numpy()
             pred = self.pred.cpu().numpy()
-            self.log("info/filter_f1", float(f1_score(labels, pred, zero_division=0)))
-            self.log("info/filter_precision", float(precision_score(labels, pred, zero_division=0)))
-            self.log("info/filter_recall", float(recall_score(labels, pred, zero_division=0)))
+            if self.config.use_filter_opt1 == "concat_pro":
+                f1, p, r = f1_score_simple(labels, pred)
+            else:
+                f1 = f1_score(labels, pred, zero_division=0)
+                p = precision_score(labels, pred, zero_division=0)
+                r = recall_score(labels, pred, zero_division=0)
+                
+            self.train_metrics = {
+                "f1": float(f1),
+                "precision": float(p),
+                "recall": float(r),
+            }
+            self.log("info/filter_f1", self.train_metrics["f1"])
+            self.log("info/filter_precision", self.train_metrics["precision"])
+            self.log("info/filter_recall", self.train_metrics["recall"])
             self.pred = None
             self.labels = None
-            debug.log(self.config.debug, float(f1_score(labels, pred, zero_division=0)))
+            debug.log(self.config.debug, self.train_metrics["f1"])
 
 
     def log_filter_val_metrics(self):
         if self.pred_val is not None and self.labels_val is not None:
             labels = self.labels_val.cpu().numpy()
             pred = self.pred_val.cpu().numpy()
-            self.log("info/filter_f1_val", float(f1_score(labels, pred, zero_division=0)))
-            self.log("info/filter_precision_val", float(precision_score(labels, pred, zero_division=0)))
-            self.log("info/filter_recall_val", float(recall_score(labels, pred, zero_division=0)))
+            if self.config.use_filter_opt1 == "concat_pro":
+                f1, p, r = f1_score_simple(labels, pred)
+            else:
+                f1 = f1_score(labels, pred, zero_division=0)
+                p = precision_score(labels, pred, zero_division=0)
+                r = recall_score(labels, pred, zero_division=0)
+                
+            self.val_metrics = {
+                "f1": float(f1),
+                "precision": float(p),
+                "recall": float(r),
+            }
+            self.log("info/filter_f1_val", self.val_metrics["f1"])
+            self.log("info/filter_precision_val", self.val_metrics["precision"])
+            self.log("info/filter_recall_val", self.val_metrics["recall"])
             self.pred_val = None
             self.labels_val = None
-            debug.log(self.config.debug, float(f1_score(labels, pred, zero_division=0)))
+            debug.log(self.config.debug, self.val_metrics["f1"])
 
 
     def get_draft_ent_groups(self, entities, batch_idx, map_dict, logits, mode, pred=None):
