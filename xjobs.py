@@ -82,9 +82,6 @@ run_config_train = dict(
 
 # 额外的配置 ========================================
 run_configs = [
-    # {
-    #     "use_cache": False,
-    # }
 ]
 
 
