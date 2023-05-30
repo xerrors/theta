@@ -147,7 +147,7 @@ class FilterModel(pl.LightningModule):
             
             else: # Default
                 loss_fct = nn.BCEWithLogitsLoss()
-                loss = loss_fct(logits, labels)
+                loss = loss_fct(logits, labels.float())
                 logits_sigmoid = logits.sigmoid()
                 pred = torch.where(logits_sigmoid > 0.5, torch.ones_like(logits_sigmoid), torch.zeros_like(logits_sigmoid))
 
