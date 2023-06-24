@@ -97,18 +97,18 @@ class FilterModel(pl.LightningModule):
             for j, e in enumerate(entities[i]):
                 map_dict[(i, e[0])] = j
 
-            if not self.config.use_ent_hidden_state or self.config.use_ent_hidden_state == "head":
+            if not self.config.use_rel_opt2 or self.config.use_rel_opt2 == "head":
                 ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])
-            elif self.config.use_ent_hidden_state == "add":
+            elif self.config.use_rel_opt2 == "add":
                 head_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])
                 tail_hs = torch.stack([hidden_state[i, ent[1]-1] for ent in entities[i]])
                 ent_hs = head_hs + tail_hs
-            elif self.config.use_ent_hidden_state == "mean":
+            elif self.config.use_rel_opt2 == "mean":
                 ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].mean(dim=0) for ent in entities[i]])
-            elif self.config.use_ent_hidden_state == "max":
+            elif self.config.use_rel_opt2 == "max":
                 ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].max(dim=0)[0] for ent in entities[i]])
             else:
-                raise NotImplementedError("use_ent_hidden_state: {}".format(self.config.use_ent_hidden_state))
+                raise NotImplementedError("use_rel_opt2: {}".format(self.config.use_rel_opt2))
 
             # ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
             ent_num, hidden_size = ent_hs.shape

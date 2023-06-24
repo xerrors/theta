@@ -17,63 +17,56 @@ from xerrors.metrics import confidence_interval
 
 # 根据 run_config 生成所有的组合
 run_id = f"RUN_{xerrors.cur_time()}"
+# run_id = "RUN_2023-06-23_20-03-59"
 
 # To Test
 index = {
     "use_graph_layers": "G",
     "use_two_plm": "PLM2",
-    "use_rel": "R-",
-    "use_ent_pred_rel": "-",
-    "use_rel_opt1": "F-", # filter, batch
+    "use_ner": "NER#",
+    "use_rel": "R#",
+    # "use_ent_pred_rel": "",
     "use_gold_ent_val": "GoldEnt",
     "use_gold_filter_val": "GoldFilter",
     "use_filter_hard": "Hard",
     "use_thres_train": "ThresT",
     "use_thres_val": "ThresV",
     "max_epochs": "E",
-    "use_filter_opt1": "Fopt1-",
-    "use_filter_opt2": "Fopt2-",
-    "use_filter_opt3": "Fopt3-",
-    "use_filter_opt4": "Fopt4-",
-    "use_filter_opt5": "Fopt5-",
+    "use_rel_opt1": "R1#",
+    "use_rel_opt2": "R2#",
+    "use_filter_opt1": "F1#",
+    "use_filter_opt2": "F2#",
+    "use_filter_opt3": "F3#",
+    "use_filter_opt4": "F4#",
+    "use_filter_opt5": "F5#",
+    "use_filter_opt6": "F6#",
     "use_filter_label_enhance": "LabelEn",
-    "use_ent_hidden_state": "EntHid-", # head, mean, max
     "use_ent_attn": "AttnE",
-    "ent_pair_threshold": "T-",
+    "ent_pair_threshold": "T#",
     "use_spert": "SpERT",
-    "na_ner_weight": "NaW-",
-    "use_ner": "NER-",
+    "na_ner_weight": "NaNER@",
+    "na_rel_weight": "NaRel@",
     "use_thres_plus": "ThresT+",
-    "context_window": "CW-",
+    "context_window": "CW#",
     "precision": "P",
-    "task_lr": "LR2-",
+    "task_lr": "LR2#",
 }
 
-TAG = "Kappa"
-
-# TODO
-# use_filter_opt4: [0.25]
-# use_filter_opt1: ["concat_pro"]
+TAG = "Tau"
+SEEDS = [100, 200, 300, 400, 500]
+# SEEDS = [600, 700, 800, 900, 1000]
 
 # 用于测试的配置 ===================================
 run_config_test = dict(
     use_thres_val=True,
-    test_from_ckpt=['output/ouput-2023-05-28_14-35-56-Kappa-R-mlp--embed2-Fopt1-concat_pro-Fopt5-u1/config.yaml', 'output/ouput-2023-05-28_17-25-01-Kappa-R-mlp--embed2-Fopt1-concat_pro-Fopt5-u1/config.yaml', 'output/ouput-2023-05-28_20-19-39-Kappa-R-mlp--embed2-Fopt1-concat_pro-Fopt5-u1/config.yaml', 'output/ouput-2023-05-28_23-18-12-Kappa-R-mlp--embed2-Fopt1-concat_pro-Fopt5-u1/config.yaml', 'output/ouput-2023-05-29_02-14-34-Kappa-R-mlp--embed2-Fopt1-concat_pro-Fopt5-u1/config.yaml'],
+    test_from_ckpt=["output/ouput-2023-06-20_06-53-56-Kappa@T-ThresT+-R#mlp-R2#mean-embed2-F1#concat_pro-F5#u1-F3#0618/config.yaml","output/ouput-2023-06-20_04-03-28-Kappa@T-ThresT+-R#mlp-R2#mean-embed2-F1#concat_pro-F5#u1-F3#0618/config.yaml","output/ouput-2023-06-20_01-12-59-Kappa@T-ThresT+-R#mlp-R2#mean-embed2-F1#concat_pro-F5#u1-F3#0618/config.yaml","output/ouput-2023-06-19_22-22-03-Kappa@T-ThresT+-R#mlp-R2#mean-embed2-F1#concat_pro-F5#u1-F3#0618/config.yaml","output/ouput-2023-06-19_19-31-55-Kappa@T-ThresT+-R#mlp-R2#mean-embed2-F1#concat_pro-F5#u1-F3#0618/config.yaml"],
     ent_pair_threshold=[0, 0.001, 0.01, 0.03, 0.05, 0.07],
 )
 
 # 用于训练的配置 ====================================
 run_config_train = dict(
-    # task_lr=[5e-3, 5e-5],
-    # use_rel=["lmhead", "mlp"],
-    # max_epochs=40,
-    use_thres_plus=True,
-    use_rel="mlp",
-    use_ent_pred_rel="embed2",
-    use_filter_opt4=0.25,
-    use_filter_opt1="concat_pro",
-    use_filter_opt5="u1",
-    seed=[100, 200, 300, 400, 500],
+    use_rel_opt1=["mid_pos", "tag+", "mid_pos+"],
+    seed=SEEDS,
 )
 
 # Queue ============================================
@@ -81,9 +74,15 @@ run_config_train = dict(
 
 
 # 额外的配置 ========================================
-run_configs = [
+raw_run_configs = [
+
 ]
 
+run_configs = []
+for seed in SEEDS:
+    for config in raw_run_configs:
+        config["seed"] = seed
+        run_configs.append(config.copy())
 
 # ==================================================
 def get_all_combinations(run_config):

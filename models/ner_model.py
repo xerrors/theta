@@ -34,6 +34,7 @@ class NERModel(pl.LightningModule):
         self.self_attn = SelfAttention(embed_dim=hidden_size)
 
         self.num_ent_type = len(self.config.dataset.ents)
+        self.loss_weight = torch.FloatTensor([config.get("na_ner_weight", 1)] + [1] * self.num_ent_type * 2)
 
     def forward(self, hidden_state, labels=None, graph=None, mask=None):
 
@@ -62,11 +63,11 @@ class NERModel(pl.LightningModule):
                 loss = -self.crf(logits, labels, mask=mask, reduction='token_mean')
 
             else:
-                loss_fct = nn.CrossEntropyLoss(reduction='none')
-                new_logits = logits.view(-1, len(self.ent_ids))
-                new_labels = labels.view(-1).long()
+                loss_fct = nn.CrossEntropyLoss(reduction="mean", weight=self.loss_weight.cuda())
+                new_logits = logits.view(-1, len(self.ent_ids))[mask.view(-1) > 0]
+                new_labels = labels.view(-1).long()[mask.view(-1) > 0]
 
-                loss = (loss_fct(new_logits, new_labels) * mask.view(-1)).sum() / mask.sum()
+                loss = loss_fct(new_logits, new_labels)
 
         return logits, loss
 
