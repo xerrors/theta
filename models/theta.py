@@ -62,9 +62,12 @@ class Theta(pl.LightningModule):
         ents = config.dataset.ents
 
         rel_tokens = [f"[R{i}]" for i in range(len(rels))]
-        tag_tokens = [f"[S-{e}]" for e in ents] + [f"[E-{e}]" for e in ents] + ["[SS]", "[OS]", "[SE]", "[OE]"]
+        tag_tokens = [f"[S-{e}]" for e in ents] + [f"[E-{e}]" for e in ents]
         ent_tokens = ["[O]"] + [f"[B-{e}]" for e in ents] + [f"[I-{e}]" for e in ents]
         special_tokens = ["[RC]"]
+
+        if config.use_normal_tag:
+            tag_tokens +=["[SS]", "[OS]", "[SE]", "[OE]"]
 
         # 扩展词表
         special_tokens_dict = {'additional_special_tokens': rel_tokens + ent_tokens + tag_tokens + special_tokens}
@@ -110,10 +113,11 @@ class Theta(pl.LightningModule):
                 ace_tag_ids.insert(idx, self.tokenizer.encode("start " + ace_ent_map[ent], add_special_tokens=False))
                 ace_tag_ids.append(self.tokenizer.encode("end " + ace_ent_map[ent], add_special_tokens=False))
 
-            ace_tag_ids.append(self.tokenizer.encode("subject start", add_special_tokens=False))
-            ace_tag_ids.append(self.tokenizer.encode("object start", add_special_tokens=False))
-            ace_tag_ids.append(self.tokenizer.encode("subject end", add_special_tokens=False))
-            ace_tag_ids.append(self.tokenizer.encode("object end", add_special_tokens=False))
+            if config.use_normal_tag:
+                ace_tag_ids.append(self.tokenizer.encode("subject start", add_special_tokens=False))
+                ace_tag_ids.append(self.tokenizer.encode("object start", add_special_tokens=False))
+                ace_tag_ids.append(self.tokenizer.encode("subject end", add_special_tokens=False))
+                ace_tag_ids.append(self.tokenizer.encode("object end", add_special_tokens=False))
 
             for i, tag_id in enumerate(self.tag_ids):
                 embeds[tag_id] = embeds[ace_tag_ids[i]].mean(dim=-2) # type: ignore
