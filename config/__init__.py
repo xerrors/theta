@@ -144,6 +144,7 @@ class Config(SimpleConfig):
 
     def save_best_model_path(self, path):
         self.best_model_path = path
+        self.last_model_path = path.replace(path.split(os.sep)[-1], "last.ckpt")
         print(utils.green("Done!"), f"Best model saved at: {path}")
 
     def save_config(self, filename="config.yaml"):

@@ -62,7 +62,7 @@ class Theta(pl.LightningModule):
         ents = config.dataset.ents
 
         rel_tokens = [f"[R{i}]" for i in range(len(rels))]
-        tag_tokens = [f"[S-{e}]" for e in ents] + [f"[E-{e}]" for e in ents]
+        tag_tokens = [f"[S-{e}]" for e in ents] + [f"[E-{e}]" for e in ents] + ["[SS]", "[OS]", "[SE]", "[OE]"]
         ent_tokens = ["[O]"] + [f"[B-{e}]" for e in ents] + [f"[I-{e}]" for e in ents]
         special_tokens = ["[RC]"]
 
@@ -110,6 +110,11 @@ class Theta(pl.LightningModule):
                 ace_tag_ids.insert(idx, self.tokenizer.encode("start " + ace_ent_map[ent], add_special_tokens=False))
                 ace_tag_ids.append(self.tokenizer.encode("end " + ace_ent_map[ent], add_special_tokens=False))
 
+            ace_tag_ids.append(self.tokenizer.encode("subject start", add_special_tokens=False))
+            ace_tag_ids.append(self.tokenizer.encode("object start", add_special_tokens=False))
+            ace_tag_ids.append(self.tokenizer.encode("subject end", add_special_tokens=False))
+            ace_tag_ids.append(self.tokenizer.encode("object end", add_special_tokens=False))
+
             for i, tag_id in enumerate(self.tag_ids):
                 embeds[tag_id] = embeds[ace_tag_ids[i]].mean(dim=-2) # type: ignore
                 if self.config.use_two_plm:
@@ -126,7 +131,7 @@ class Theta(pl.LightningModule):
         self.rel_model = REModel(self)
         self.ner_model = NERModel(self)
         self.filter = FilterModel(self)
-        self.span_ner = SpanEntityModel(self)
+        # self.span_ner = SpanEntityModel(self)
         self.graph = RuntimeGraph(self) if config.use_graph_layers > 0 else None
 
     def predict_step(self, sent: str, ansser=None):
@@ -185,11 +190,11 @@ class Theta(pl.LightningModule):
             sub_type = self.config.dataset.ents[sub_t]
             obj_type = self.config.dataset.ents[obj_t]
             pair_key = (sub_token, obj_token)
-            
+
             pair_name[pair_key] = max(score, pair_name.get(pair_key, 0))
 
         pairs = [key + (value,) for key, value in pair_name.items()]
-            
+
         rels = []
         rels_name = []
         # start, end 是左闭右开区间

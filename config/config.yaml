@@ -21,7 +21,7 @@ max_epochs: 30
 # auto_lr: True
 # fast_dev_run: True
 precision: 16
-reload_dataloaders_every_epoch: True
+# reload_dataloaders_every_epoch: True
 
 # INFO: Model
 max_seq_len: 500
@@ -33,10 +33,14 @@ dataset_config: datasets/ace2005/ace2005.yaml # can not be modified in ext_confi
 
 # INFO: sub-task
 use_ner: "mlp"
-use_rel: "lmhead"
+use_rel: "mlp"
 use_filter: True
 use_two_plm: False
 use_cache: True
+
+use_ent_pred_rel: "embed2"
+use_filter_opt1: "concat_pro"
+use_filter_opt5: "u1"
 
 # Graph
 use_graph_layers: 0
@@ -47,9 +51,11 @@ rel_rate: 1
 filter_rate: 1
 
 # Filter
-use_rel_opt1: "filter"
+use_rel_opt1: "obj"
+use_rel_opt2: "mean"
 use_filter_hard: False
 use_thres_val: False
+use_thres_plus: True
 use_gold_ent_val: False
 use_gold_filter_val: False
 use_filter_label_enhance: False
@@ -63,6 +69,5 @@ use_spert: False # defeat
 ent_pair_threshold: 0.01
 
 # set
-use_ent_pred_rel: "tag"
 use_ent_attn: True
 use_thres_train: True

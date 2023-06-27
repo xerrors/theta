@@ -27,11 +27,12 @@ class FilterModel(pl.LightningModule):
         attention_out_dim = int(self.config.model.hidden_size * float(self.config.get("use_filter_opt4", 1.0)))
         self.tag_size = len(self.config.dataset.rels) + 1 if self.config.use_filter_opt1 == "concat_pro" else 1
 
-        self.sub_proj = nn.Linear(self.config.model.hidden_size, attention_out_dim)
-        self.obj_proj = nn.Linear(self.config.model.hidden_size, attention_out_dim)
+        remove_bias = self.config.use_filter_opt2 == "rm_bias"
+        self.sub_proj = nn.Linear(self.config.model.hidden_size, attention_out_dim, bias=(not remove_bias))
+        self.obj_proj = nn.Linear(self.config.model.hidden_size, attention_out_dim, bias=(not remove_bias))
 
         self.filter_entity_pair_net = MultiNonLinearClassifier(
-            attention_out_dim * 2, 
+            attention_out_dim * 2,
             tag_size=self.tag_size)
 
         self.hard_filter_table = torch.load("datasets/ace2005/ent_rel_corres.data").sum(dim=-1)
@@ -74,7 +75,7 @@ class FilterModel(pl.LightningModule):
                 if i is None or j is None:
                     continue
                 index = self.convert_bij_to_index((b,i,j), entities)
-                labels[index] = t[4] + 1 if self.config.use_filter_opt1 == "concat_pro" else 1 
+                labels[index] = t[4] + 1 if self.config.use_filter_opt1 == "concat_pro" else 1
                 if self.config.use_filter_label_enhance:
                     index = self.convert_bij_to_index((b,j,i), entities)
                     labels[index] = 1
@@ -85,10 +86,7 @@ class FilterModel(pl.LightningModule):
         logits = []
         map_dict = {}
 
-        if self.config.use_filter_opt2 == "detach":
-            hidden_state = hidden_state.detach()
-        else:
-            hidden_state = self.dropout(hidden_state)
+        hidden_state = self.dropout(hidden_state)
 
         for i in range(len(entities)):
             if len(entities[i]) == 0: continue
@@ -97,18 +95,18 @@ class FilterModel(pl.LightningModule):
             for j, e in enumerate(entities[i]):
                 map_dict[(i, e[0])] = j
 
-            if not self.config.use_ent_hidden_state or self.config.use_ent_hidden_state == "head":
+            if not self.config.use_rel_opt2 or self.config.use_rel_opt2 == "head":
                 ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])
-            elif self.config.use_ent_hidden_state == "add":
+            elif self.config.use_rel_opt2 == "add":
                 head_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])
                 tail_hs = torch.stack([hidden_state[i, ent[1]-1] for ent in entities[i]])
                 ent_hs = head_hs + tail_hs
-            elif self.config.use_ent_hidden_state == "mean":
+            elif self.config.use_rel_opt2 == "mean":
                 ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].mean(dim=0) for ent in entities[i]])
-            elif self.config.use_ent_hidden_state == "max":
+            elif self.config.use_rel_opt2 == "max":
                 ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].max(dim=0)[0] for ent in entities[i]])
             else:
-                raise NotImplementedError("use_ent_hidden_state: {}".format(self.config.use_ent_hidden_state))
+                raise NotImplementedError("use_rel_opt2: {}".format(self.config.use_rel_opt2))
 
             # ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
             ent_num, hidden_size = ent_hs.shape
@@ -144,7 +142,7 @@ class FilterModel(pl.LightningModule):
                 loss_fct = nn.CrossEntropyLoss()
                 loss = loss_fct(logits, labels.long())
                 pred = torch.argmax(logits, dim=-1)
-            
+
             else: # Default
                 loss_fct = nn.BCEWithLogitsLoss()
                 loss = loss_fct(logits, labels.float())
@@ -176,7 +174,7 @@ class FilterModel(pl.LightningModule):
                 f1 = f1_score(labels, pred, zero_division=0)
                 p = precision_score(labels, pred, zero_division=0)
                 r = recall_score(labels, pred, zero_division=0)
-                
+
             self.train_metrics = {
                 "f1": float(f1),
                 "precision": float(p),
@@ -200,7 +198,7 @@ class FilterModel(pl.LightningModule):
                 f1 = f1_score(labels, pred, zero_division=0)
                 p = precision_score(labels, pred, zero_division=0)
                 r = recall_score(labels, pred, zero_division=0)
-                
+
             self.val_metrics = {
                 "f1": float(f1),
                 "precision": float(p),
