@@ -17,7 +17,7 @@ from xerrors.metrics import confidence_interval
 
 # 根据 run_config 生成所有的组合
 # run_id = f"RUN_{xerrors.cur_time()}"
-run_id = "RUN_2023-06-28_10-21-59"
+run_id = "RUN_2023-06-30_22-20-59"
 
 # To Test
 index = {
@@ -49,44 +49,63 @@ index = {
     "use_thres_plus": "ThresT+",
     "context_window": "CW#",
     "precision": "P",
-    "task_lr": "LR2#",
 
     # addition
     "use_bio_embed": "BioEmbed",
     "use_normal_tag": "NormalTag",
+    "use_o_appfix": "AppO",
+    "use_filter_attn": "AttnF",
+    "use_ent_tag_cross_attn": "ECA",
+
+    # learning rate
+    "task_lr": "LR2#",
+    "ner_lr": "ELR#",
+    "rel_lr": "RLR#",
+    "filter_lr": "FLR#",
 }
 
-TAG = "Tau"
+TAG = "Tau-N"
 SEEDS = [100, 200, 300, 400, 500]
 # SEEDS = [600, 700, 800, 900, 1000]
+
+# TODO START ======================================
+"""
+use_ent_tag_cross_attn=True,
+
+task_lr = 0.0001
+
+"""
+
+# TODO End ========================================
+
 
 # 用于测试的配置 ===================================
 run_config_test = dict(
     use_thres_val=True,
     test_opt1="last",
-    test_from_ckpt=["output/ouput-2023-06-27_18-24-16-Tau-F5#x2-F3#None/config.yaml"],
+    test_from_ckpt=['output/ouput-2023-07-01_01-28-09-Tau-N-BioEmbed-ECA/config.yaml', 'output/ouput-2023-07-01_03-53-49-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-01_06-20-50-Tau-N-BioEmbed-LR2#0.0001/config.yaml', 'output/ouput-2023-07-01_08-47-17-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-01_11-14-01-Tau-N-BioEmbed-LR2#0.0001/config.yaml', 'output/ouput-2023-07-01_13-31-06-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-01_15-56-05-Tau-N-BioEmbed-LR2#0.0001/config.yaml', 'output/ouput-2023-07-01_18-20-55-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-01_20-46-14-Tau-N-BioEmbed-LR2#0.0001/config.yaml', 'output/ouput-2023-07-01_23-06-55-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-02_01-33-20-Tau-N-BioEmbed-LR2#0.0001/config.yaml'],
     ent_pair_threshold=[0, 0.001, 0.01, 0.03, 0.05, 0.07],
 )
 
-# 用于训练的配置 ====================================
+# 多个配置项的多种子训练 ====================================
 run_config_train = dict(
-    use_bio_embed=True,
-    use_normal_tag=[True, False],
-    seed=SEEDS,
+    # use_bio_embed=True,
+    # task_lr=[0.00005, 0.0001],
+    # seed=SEEDS,
 )
 
-# Queue ============================================
-# use_rel="mlp"
-
-
-# 额外的配置 ========================================
+# 单个配置项的多种子训练 ====================================
 raw_run_configs = [
-    # dict(max_epochs=30),
-    # dict(use_filter_opt2="rm_bias"),
+    dict(use_bio_embed=True, filter_lr=0.0005, rel_lr=0.00005, ner_lr=0.0005),
+    dict(use_bio_embed=True, filter_lr=0.005, rel_lr=0.00005, ner_lr=0.0005),
+    # dict(use_bio_embed=True, use_ner="lmhead", use_rel="lmhead", use_ent_attn=False),
 ]
 
+# 单个配置项的默认种子训练 ==================================
 pre_run_configs = [
-    dict(max_epochs=30, seed=300),
+    # dict(use_bio_embed=True, filter_lr=0.005),
+    # dict(use_bio_embed=True, filter_lr=0.005, rel_lr=0.00005),
+    # dict(use_bio_embed=True, filter_lr=0.05),
 ]
 
 run_configs = []
@@ -235,7 +254,15 @@ else:
 results = []
 for config in run_configs:
     config = refine_config(config, args)
+    cp.info("XJOBS", f"Config: {config['tag']} ${config.get('seed', 'N/A')}")
 
+# 确认，开始运行，输入y确认，其余取消
+option = input("Confirm to run? (y/n): ")
+if option != "y" and option != "Y":
+    cp.error("XJOBS", "Canceled!")
+    exit()
+
+for config in run_configs:
     result = exec_main(config)
     cp.print_json(result)
     result["tag"] = config["tag"]

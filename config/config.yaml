@@ -7,9 +7,10 @@ tag: default
 
 # INFO: Run
 num_worker: 12
-batch_size: 4 # can be overrided by model.yaml
+batch_size: 8 # can be overrided by model.yaml
 lr: 0.00005
 task_lr: 0.0005
+rel_lr: 0.00005
 # decoder_lr: 0.00003
 # Achieved by gradient accumulation
 # accumulate_grad_batches will be set as global_batch_size // batch_size
@@ -38,6 +39,7 @@ use_filter: True
 use_two_plm: False
 use_cache: True
 
+use_bio_embed: True
 use_ent_pred_rel: "embed2"
 use_filter_opt1: "concat_pro"
 use_filter_opt5: "u1"

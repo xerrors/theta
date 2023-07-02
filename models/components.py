@@ -32,11 +32,12 @@ class MultiNonLinearClassifier(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads=4):
+    def __init__(self, embed_dim, num_heads=4, use_mask=False):
         super(SelfAttention, self).__init__()
         self.multihead_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True)
         self.layer_norm = nn.LayerNorm(embed_dim)
         self.mask = None
+        self.use_mask = use_mask
 
     def create_mask(self, input_shape, input_device):
         
@@ -49,14 +50,16 @@ class SelfAttention(nn.Module):
 
     def forward(self, x):
         # 创建 mask 矩阵
-        if self.mask is None or self.mask.shape[0] < x.shape[1]:
-            self.create_mask(x.shape, x.device)
-            attn_mask = self.mask
-        elif self.mask.shape[0] >= x.shape[1]:
-            attn_mask = self.mask[:x.shape[1], :x.shape[1]].clone()
+        if self.use_mask:
+            if self.mask is None or self.mask.shape[0] < x.shape[1]:
+                self.create_mask(x.shape, x.device)
+                attn_mask = self.mask
+            elif self.mask.shape[0] >= x.shape[1]:
+                attn_mask = self.mask[:x.shape[1], :x.shape[1]].clone()
+            else:
+                raise ValueError("Mask shape error.")
         else:
-            raise ValueError("Mask shape error.")
-        # attn_mask = None
+            attn_mask = None
 
         # 执行 self-attention 操作
         attn_output, _ = self.multihead_attn(x, x, x, attn_mask=attn_mask)

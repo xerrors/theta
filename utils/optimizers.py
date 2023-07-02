@@ -16,13 +16,31 @@ def get_optimizer(theta, config):
     model_lr = config.get("model_lr", config.lr)  # default model_lr = lr
     task_lr = config.get("task_lr", config.lr)
     decoder_lr = config.get("decoder_lr", config.lr)
+    filter_lr = config.get("filter_lr", task_lr)
+    ner_lr = config.get("ner_lr", task_lr)
+    rel_lr = config.get("rel_lr", task_lr)
 
+    added_list = []
     optimizer_group_parameters = []
     optimizer_group_parameters.extend(get_params(theta, name="plm_model", lr=model_lr))
-    optimizer_group_parameters.extend(get_params(theta, name="filter", lr=task_lr))
-    optimizer_group_parameters.extend(get_params(theta, name="span_ner", lr=task_lr))
-    optimizer_group_parameters.extend(get_params(theta, name="ner_model", lr=task_lr))
-    optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=["plm_model", "filter", "span_ner", "ner_model"]))
+    added_list.append("plm_model")
+
+    optimizer_group_parameters.extend(get_params(theta, name="filter", lr=filter_lr))
+    added_list.append("filter")
+
+    if config.use_span_ner:
+        optimizer_group_parameters.extend(get_params(theta, name="span_ner", lr=task_lr))
+        added_list.append("span_ner")
+
+    if config.use_ner != "lmhead":
+        optimizer_group_parameters.extend(get_params(theta, name="ner_model", lr=ner_lr))
+        added_list.append("ner_model")
+
+    if config.use_rel != "lmhead":
+        optimizer_group_parameters.extend(get_params(theta, name="rel_model", lr=rel_lr))
+        added_list.append("rel_model")
+
+    optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=added_list))
 
     optimizer = AdamW(optimizer_group_parameters, lr=config.lr, eps=1e-8)
 

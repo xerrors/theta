@@ -25,13 +25,20 @@ class NERModel(pl.LightningModule):
         elif config.use_ner == "linear":
             self.classifier = nn.Linear(hidden_size, len(self.ent_ids))
 
-        else:
+        elif config.use_ner == "mlp":
+            if config.use_ent_tag_cross_attn:
+                self.word_embeddings = theta.plm_model.get_input_embeddings()
+                self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
+                self.layer_norm = nn.LayerNorm(hidden_size)
             self.classifier = MultiNonLinearClassifier(hidden_size, len(self.ent_ids), layers_num=2)
+        
+        else:
+            raise NotImplementedError(f"config.use_ner = {config.use_ner} is not implemented")
 
         if self.config.use_crf:
             self.crf = CRF(len(self.ent_ids), batch_first=True)
 
-        self.self_attn = SelfAttention(embed_dim=hidden_size)
+        self.self_attn = SelfAttention(embed_dim=hidden_size, use_mask=True)
 
         self.num_ent_type = len(self.config.dataset.ents)
         self.loss_weight = torch.FloatTensor([config.get("na_ner_weight", 1)] + [1] * self.num_ent_type * 2)
@@ -40,6 +47,12 @@ class NERModel(pl.LightningModule):
 
         if self.config.use_ent_attn:
             hidden_state = self.self_attn(hidden_state)
+
+        if self.config.use_ent_tag_cross_attn:
+            tag_embeddings = self.word_embeddings(torch.tensor(self.ent_ids, device=hidden_state.device))
+            tag_embeddings = tag_embeddings.unsqueeze(0).repeat(hidden_state.shape[0], 1, 1)
+            hidden_state_o, _ = self.cross_attn(hidden_state, tag_embeddings, tag_embeddings)
+            hidden_state = self.layer_norm(hidden_state + hidden_state_o)
 
         if graph is not None:
             hidden_state = graph.query_ents(hidden_state)

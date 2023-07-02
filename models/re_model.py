@@ -31,10 +31,14 @@ class REModel(pl.LightningModule):
             self.classifier = nn.Linear(hidden_size, len(self.rel_ids))
 
         elif config.use_rel == 'mlp':
+            # if config.use_rel_tag_cross_attn:
+            #     self.word_embeddings = theta.plm_model.get_input_embeddings()
+            #     self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
+            #     self.layer_norm = nn.LayerNorm(hidden_size)
             self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
 
         else:
-            self.classifier = MultiNonLinearClassifier(hidden_size, len(self.rel_ids))
+            raise NotImplementedError(f"config.use_rel = {config.use_rel} is not implemented")
 
         self.grt_count = 0
         self.hit_count = 0
@@ -157,8 +161,10 @@ class REModel(pl.LightningModule):
 
             bio_ids = np.array([theta.ent_ids[0]] * (sent_len+2))
             for e in entity:
-                bio_ids[e[0]-sent_s+1] = theta.ent_ids[e[2]]
-                bio_ids[e[0]-sent_s+2:e[1]-sent_s+1] = theta.ent_ids[e[2] + self.ent_type_num]
+                bio_ids[e[0]-sent_s+1] = theta.ent_ids[e[2] + 1]
+                bio_ids[e[0]-sent_s+2:e[1]-sent_s+1] = theta.ent_ids[e[2] + self.ent_type_num + 1]
+
+            bio_ids = bio_ids.tolist()
 
             # 先构建一个初始的实体组，然后按照置信度排序，能排多少是多少
             if mode != "predict":
@@ -215,41 +221,50 @@ class REModel(pl.LightningModule):
                         os_tid = theta.tag_ids[self.ent_type_num * 2 + 1]
                         se_tid = theta.tag_ids[self.ent_type_num * 2 + 2]
                         oe_tid = theta.tag_ids[self.ent_type_num * 2 + 3]
+
                     else:
                         ss_tid = theta.tag_ids[sub_t]
                         os_tid = theta.tag_ids[obj_t]
-                        se_tid = theta.tag_ids[sub_t + self.rel_type_num]
-                        oe_tid = theta.tag_ids[obj_t + self.rel_type_num]
+                        se_tid = theta.tag_ids[sub_t + self.ent_type_num]
+                        oe_tid = theta.tag_ids[obj_t + self.ent_type_num]
+
+                    if self.config.use_bio_embed and self.config.use_o_appfix:
+                        mask_bio_id = theta.ent_ids[0]
+                        ss_bio_id = theta.ent_ids[0]
+                        os_bio_id = theta.ent_ids[0]
+                        se_bio_id = theta.ent_ids[0]
+                        oe_bio_id = theta.ent_ids[0]
+                    else:
+                        mask_bio_id = theta.ent_ids[0]
+                        ss_bio_id = theta.ent_ids[sub_t + 1]
+                        os_bio_id = theta.ent_ids[obj_t + 1]
+                        se_bio_id = theta.ent_ids[sub_t + self.ent_type_num + 1]
+                        oe_bio_id = theta.ent_ids[obj_t + self.ent_type_num + 1]
 
                     ss_pid = sub_s - sent_s
                     os_pid = obj_s - sent_s
                     se_pid = sub_e - sent_s + 2
                     oe_pid = obj_e - sent_s + 2
 
-                    if not self.config.use_rel_opt1 or self.config.use_rel_opt1 == "obj":
-                        ids += [mask_token, ss_tid, os_tid]
-                        pos_ids += [os_pid, ss_pid, os_pid]
-                        masks += [marker_mask] * 3
-                    elif self.config.use_rel_opt1 == "obj+":
-                        ids += [mask_token, ss_tid, os_tid, se_tid, oe_tid]
-                        pos_ids += [os_pid, ss_pid, os_pid, se_pid, oe_pid]
-                        masks += [marker_mask] * 5
-                    elif self.config.use_rel_opt1 == "sub":
-                        ids += [mask_token, ss_tid, os_tid]
-                        pos_ids += [ss_pid, ss_pid, os_pid]
-                        masks += [marker_mask] * 3
-                    elif self.config.use_rel_opt1 == "mid":
-                        mark_pos = int((ss_pid + os_pid) / 2)
-                        ids += [mask_token, ss_tid, os_tid]
-                        pos_ids += [mark_pos, ss_pid, os_pid]
-                        masks += [marker_mask] * 3
-                    elif self.config.use_rel_opt1 == "mid+":
-                        mark_pos = int((ss_pid + os_pid) / 2)
-                        ids += [mask_token, ss_tid, os_tid, se_tid, oe_tid]
-                        pos_ids += [mark_pos, ss_pid, os_pid, se_pid, oe_pid]
-                        masks += [marker_mask] * 5
+                    if not self.config.use_rel_opt1 or self.config.use_rel_opt1.startswith("obj"):
+                        mask_pos = os_pid
+                    elif self.config.use_rel_opt1.startswith("sub"):
+                        mask_pos = ss_pid
+                    elif self.config.use_rel_opt1.startswith("mid"):
+                        mask_pos = int((ss_pid + os_pid) / 2)
                     else:
-                        raise NotImplementedError(f"rel_opt1: {self.config.use_rel_opt1} not implemented")
+                        raise Exception(f"use_rel_opt1 参数错误: {self.config.use_rel_opt1}")
+
+                    ids += [mask_token, ss_tid, os_tid]
+                    pos_ids += [mask_pos, ss_pid, os_pid]
+                    bio_ids += [mask_bio_id, ss_bio_id, os_bio_id]
+                    masks += [marker_mask] * 3
+
+                    if self.config.use_rel_opt1.endswith("+"):
+                        ids += [se_tid, oe_tid]
+                        pos_ids += [se_pid, oe_pid]
+                        bio_ids += [se_bio_id, oe_bio_id]
+                        masks += [marker_mask] * 2
 
                     if self.config.use_rel_opt2 == "max":  # default head, options: head, tail, max, mean
                         ent_hidden_states.append(torch.stack([
@@ -275,7 +290,7 @@ class REModel(pl.LightningModule):
 
         rel_input_ids = nn.utils.rnn.pad_sequence(rel_input_ids, batch_first=True, padding_value=pad_token)
         rel_positional_ids = nn.utils.rnn.pad_sequence(rel_positional_ids, batch_first=True, padding_value=0)
-        bio_tags = nn.utils.rnn.pad_sequence(rel_positional_ids, batch_first=True, padding_value=theta.ent_ids[0])
+        bio_tags = nn.utils.rnn.pad_sequence(bio_tags, batch_first=True, padding_value=theta.ent_ids[0])
 
         # 2D attention mask
         padding_length = rel_input_ids.shape[1]
@@ -336,6 +351,10 @@ class REModel(pl.LightningModule):
             # 找到 mask 的 Hidden State
             mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
+
+            # if self.config.use_rel_tag_cross_attn:
+            #     tag_embeddings = self.word_embeddings(torch.tensor(theta.ent_ids, device=device))
+            #     tag_embeddings = tag_embeddings.unsqueeze(0).unsqueeze(0).repeat(bsz, 1, 1, 1) # [bsz, 1, ent_num, hidden_size]
 
             if self.config.use_rel_opt1 is str and self.config.use_rel_opt1.endswith("+"):
                 sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1] + rel_stage_hs[mask_pos[0], mask_pos[1]+3]

@@ -32,7 +32,7 @@ def main(func_mode=False, **kwargs):
 
     # Trainer callbacks
     early_callback = pl.callbacks.EarlyStopping( # type: ignore
-        monitor="val_f1", mode="max", patience=10, check_on_train_epoch_end=False)
+        monitor="val_f1", mode="max", patience=30, check_on_train_epoch_end=False)
     model_checkpoint = pl.callbacks.ModelCheckpoint( # type: ignore
         monitor="val_f1", mode="max", save_last=True,
         filename='f1={val_f1:.4f}-epoch={epoch}',

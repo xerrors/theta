@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 from utils.metrics import f1_score_simple
 
 from xerrors import debug
-from models.components import MultiNonLinearClassifier
+from models.components import MultiNonLinearClassifier, SelfAttention
 from sklearn.metrics import f1_score, precision_score, recall_score
 
 
@@ -26,6 +26,9 @@ class FilterModel(pl.LightningModule):
 
         attention_out_dim = int(self.config.model.hidden_size * float(self.config.get("use_filter_opt4", 1.0)))
         self.tag_size = len(self.config.dataset.rels) + 1 if self.config.use_filter_opt1 == "concat_pro" else 1
+        
+        if self.config.use_filter_attn:
+            self.attn = SelfAttention(self.config.model.hidden_size)
 
         remove_bias = self.config.use_filter_opt2 == "rm_bias"
         self.sub_proj = nn.Linear(self.config.model.hidden_size, attention_out_dim, bias=(not remove_bias))
@@ -107,6 +110,9 @@ class FilterModel(pl.LightningModule):
                 ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].max(dim=0)[0] for ent in entities[i]])
             else:
                 raise NotImplementedError("use_rel_opt2: {}".format(self.config.use_rel_opt2))
+            
+            if self.config.use_filter_attn:
+                ent_hs = self.attn(ent_hs)
 
             # ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
             ent_num, hidden_size = ent_hs.shape
