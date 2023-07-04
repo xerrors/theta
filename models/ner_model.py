@@ -45,14 +45,17 @@ class NERModel(pl.LightningModule):
 
     def forward(self, hidden_state, labels=None, graph=None, mask=None):
 
-        if self.config.use_ent_attn:
+        if self.config.use_ent_attn and not self.config.use_ent_tag_cross_attn:
             hidden_state = self.self_attn(hidden_state)
 
-        if self.config.use_ent_tag_cross_attn:
+        elif self.config.use_ent_tag_cross_attn:
             tag_embeddings = self.word_embeddings(torch.tensor(self.ent_ids, device=hidden_state.device))
             tag_embeddings = tag_embeddings.unsqueeze(0).repeat(hidden_state.shape[0], 1, 1)
-            hidden_state_o, _ = self.cross_attn(hidden_state, tag_embeddings, tag_embeddings)
-            hidden_state = self.layer_norm(hidden_state + hidden_state_o)
+
+            attn_out = self.self_attn(hidden_state)
+            hidden_state = self.layer_norm(hidden_state + attn_out)
+            attn_out = self.cross_attn(hidden_state, tag_embeddings, tag_embeddings)[0]
+            hidden_state = self.layer_norm(hidden_state + attn_out)
 
         if graph is not None:
             hidden_state = graph.query_ents(hidden_state)

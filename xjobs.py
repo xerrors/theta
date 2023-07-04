@@ -50,6 +50,11 @@ index = {
     "context_window": "CW#",
     "precision": "P",
 
+    # rate
+    "filter_rate": "FR@",
+    "rel_rate": "RR@",
+    "ner_rate": "NR@",
+
     # addition
     "use_bio_embed": "BioEmbed",
     "use_normal_tag": "NormalTag",
@@ -58,24 +63,22 @@ index = {
     "use_ent_tag_cross_attn": "ECA",
 
     # learning rate
-    "task_lr": "LR2#",
-    "ner_lr": "ELR#",
-    "rel_lr": "RLR#",
-    "filter_lr": "FLR#",
+    "task_lr": "LR2@",
+    "ner_lr": "ELR@",
+    "rel_lr": "RLR@",
+    "filter_lr": "FLR@",
+    "use_filter_pro": "FPro",
+    "use_rel_sum_loss": "RSum",
+    "use_filter_sum_loss": "FSum",
 }
 
-TAG = "Tau-N"
+TAG = "Tauu"
 SEEDS = [100, 200, 300, 400, 500]
 # SEEDS = [600, 700, 800, 900, 1000]
 
 # TODO START ======================================
-"""
-use_ent_tag_cross_attn=True,
-
-task_lr = 0.0001
-
-"""
-
+# use_rel_sum_loss
+# use_filter_sum_loss
 # TODO End ========================================
 
 
@@ -83,22 +86,21 @@ task_lr = 0.0001
 run_config_test = dict(
     use_thres_val=True,
     test_opt1="last",
-    test_from_ckpt=['output/ouput-2023-07-01_01-28-09-Tau-N-BioEmbed-ECA/config.yaml', 'output/ouput-2023-07-01_03-53-49-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-01_06-20-50-Tau-N-BioEmbed-LR2#0.0001/config.yaml', 'output/ouput-2023-07-01_08-47-17-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-01_11-14-01-Tau-N-BioEmbed-LR2#0.0001/config.yaml', 'output/ouput-2023-07-01_13-31-06-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-01_15-56-05-Tau-N-BioEmbed-LR2#0.0001/config.yaml', 'output/ouput-2023-07-01_18-20-55-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-01_20-46-14-Tau-N-BioEmbed-LR2#0.0001/config.yaml', 'output/ouput-2023-07-01_23-06-55-Tau-N-BioEmbed-LR2#5e-05/config.yaml', 'output/ouput-2023-07-02_01-33-20-Tau-N-BioEmbed-LR2#0.0001/config.yaml'],
+    test_from_ckpt=['output/ouput-2023-07-02_11-43-49-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_14-05-36-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_16-27-54-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_18-49-56-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_21-12-48-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_23-35-20-Tauu-FLR#0.005/config.yaml', 'output/ouput-2023-07-03_01-59-19-Tauu-FLR#0.005/config.yaml', 'output/ouput-2023-07-03_04-23-05-Tauu-FLR#0.005/config.yaml', 'output/ouput-2023-07-03_06-46-49-Tauu-FLR#0.005/config.yaml', 'output/ouput-2023-07-03_09-10-42-Tauu-FLR#0.005/config.yaml'],
     ent_pair_threshold=[0, 0.001, 0.01, 0.03, 0.05, 0.07],
 )
 
 # 多个配置项的多种子训练 ====================================
 run_config_train = dict(
-    # use_bio_embed=True,
-    # task_lr=[0.00005, 0.0001],
+    # use_rel_sum_loss=True,
     # seed=SEEDS,
 )
 
 # 单个配置项的多种子训练 ====================================
 raw_run_configs = [
-    dict(use_bio_embed=True, filter_lr=0.0005, rel_lr=0.00005, ner_lr=0.0005),
-    dict(use_bio_embed=True, filter_lr=0.005, rel_lr=0.00005, ner_lr=0.0005),
-    # dict(use_bio_embed=True, use_ner="lmhead", use_rel="lmhead", use_ent_attn=False),
+    # dict(use_rel_sum_loss=True),
+    dict(use_filter_sum_loss=True, filter_rate=0.01),
+    # dict(use_rel_sum_loss=True, use_filter_sum_loss=True),
 ]
 
 # 单个配置项的默认种子训练 ==================================

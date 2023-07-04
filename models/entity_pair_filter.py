@@ -24,9 +24,11 @@ class FilterModel(pl.LightningModule):
         self.pred_val = None
         self.labels_val = None
 
+        dropout_rate = 0.3 if self.config.use_filter_pro else 0.1
+
         attention_out_dim = int(self.config.model.hidden_size * float(self.config.get("use_filter_opt4", 1.0)))
         self.tag_size = len(self.config.dataset.rels) + 1 if self.config.use_filter_opt1 == "concat_pro" else 1
-        
+
         if self.config.use_filter_attn:
             self.attn = SelfAttention(self.config.model.hidden_size)
 
@@ -36,10 +38,12 @@ class FilterModel(pl.LightningModule):
 
         self.filter_entity_pair_net = MultiNonLinearClassifier(
             attention_out_dim * 2,
+            dropout_rate=dropout_rate,
+            hidden_dim=256 if self.config.use_filter_pro else None,
             tag_size=self.tag_size)
 
         self.hard_filter_table = torch.load("datasets/ace2005/ent_rel_corres.data").sum(dim=-1)
-        self.dropout = nn.Dropout(0.1)
+        self.dropout = nn.Dropout(dropout_rate)
 
         # metrics
         self.train_metrics = {
@@ -110,7 +114,7 @@ class FilterModel(pl.LightningModule):
                 ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].max(dim=0)[0] for ent in entities[i]])
             else:
                 raise NotImplementedError("use_rel_opt2: {}".format(self.config.use_rel_opt2))
-            
+
             if self.config.use_filter_attn:
                 ent_hs = self.attn(ent_hs)
 
@@ -119,6 +123,10 @@ class FilterModel(pl.LightningModule):
 
             ent_hs_x = self.sub_proj(ent_hs)
             ent_hs_y = self.obj_proj(ent_hs)
+
+            if self.config.use_filter_pro:
+                ent_hs_x = self.dropout(ent_hs_x)
+                ent_hs_y = self.dropout(ent_hs_y)
 
             if not self.config.use_filter_opt1 or self.config.use_filter_opt1 == "attention":
                 ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-2, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
@@ -145,12 +153,14 @@ class FilterModel(pl.LightningModule):
             labels = self.get_filter_label(entities, triples, logits, map_dict)
 
             if self.config.use_filter_opt1 == "concat_pro":
-                loss_fct = nn.CrossEntropyLoss()
+                reduction = 'sum' if self.config.use_filter_sum_loss else None
+                loss_fct = nn.CrossEntropyLoss(reduction=reduction)
                 loss = loss_fct(logits, labels.long())
                 pred = torch.argmax(logits, dim=-1)
 
             else: # Default
-                loss_fct = nn.BCEWithLogitsLoss()
+                reduction = 'sum' if self.config.use_filter_sum_loss else None
+                loss_fct = nn.BCEWithLogitsLoss(reduction=reduction)
                 loss = loss_fct(logits, labels.float())
                 logits_sigmoid = logits.sigmoid()
                 pred = torch.where(logits_sigmoid > 0.5, torch.ones_like(logits_sigmoid), torch.zeros_like(logits_sigmoid))

@@ -457,7 +457,8 @@ class REModel(pl.LightningModule):
 
         rel_loss = torch.tensor(0.0).to(logits.device)
         if triple_labels is not None and return_loss:
-            loss_fct = nn.CrossEntropyLoss(reduction='mean', weight=self.loss_weight.to(logits.device))
+            reduction = 'sum' if self.config.use_rel_sum_loss else 'mean'
+            loss_fct = nn.CrossEntropyLoss(reduction=reduction, weight=self.loss_weight.to(logits.device))
             new_logits = logits.view(-1, len(self.rel_ids))
             new_labels = triple_labels.view(-1)
 

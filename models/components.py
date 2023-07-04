@@ -53,9 +53,9 @@ class SelfAttention(nn.Module):
         if self.use_mask:
             if self.mask is None or self.mask.shape[0] < x.shape[1]:
                 self.create_mask(x.shape, x.device)
-                attn_mask = self.mask
+                attn_mask = self.mask.to(torch.bool)
             elif self.mask.shape[0] >= x.shape[1]:
-                attn_mask = self.mask[:x.shape[1], :x.shape[1]].clone()
+                attn_mask = self.mask[:x.shape[1], :x.shape[1]].clone().to(torch.bool)
             else:
                 raise ValueError("Mask shape error.")
         else:
