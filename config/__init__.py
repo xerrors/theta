@@ -85,12 +85,13 @@ class Config(SimpleConfig):
         # if os.path.exists(link) and os.path.islink(link):
         #     os.remove(link)
 
-        dir_name = self.output_dir.split(os.sep)[-1]
-        try:
-            os.symlink(f"{dir_name}", link, target_is_directory=True)
-        except:
-            os.remove(link)
-            os.symlink(f"{dir_name}", link, target_is_directory=True)
+        if not self.debug:
+            dir_name = self.output_dir.split(os.sep)[-1]
+            try:
+                os.symlink(f"{dir_name}", link, target_is_directory=True)
+            except:
+                os.remove(link)
+                os.symlink(f"{dir_name}", link, target_is_directory=True)
 
     def parse_config(self, config_file, config_type):
         with open(config_file, 'r') as f:

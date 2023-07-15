@@ -138,7 +138,7 @@ class FilterModel(pl.LightningModule):
                 ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
 
             else:
-                raise ValueError("use_filter_opt1 must be in [None, 'attention', 'concat', 'concat_pro']")
+                raise ValueError("use_filter_opt1 must be in ['attention', 'concat', 'concat_pro']")
 
             ent_hs_pair = ent_hs_pair.view(-1, self.tag_size).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
 
@@ -153,13 +153,13 @@ class FilterModel(pl.LightningModule):
             labels = self.get_filter_label(entities, triples, logits, map_dict)
 
             if self.config.use_filter_opt1 == "concat_pro":
-                reduction = 'sum' if self.config.use_filter_sum_loss else None
+                reduction = 'sum' if self.config.use_filter_sum_loss else "mean"
                 loss_fct = nn.CrossEntropyLoss(reduction=reduction)
                 loss = loss_fct(logits, labels.long())
                 pred = torch.argmax(logits, dim=-1)
 
             else: # Default
-                reduction = 'sum' if self.config.use_filter_sum_loss else None
+                reduction = 'sum' if self.config.use_filter_sum_loss else "mean"
                 loss_fct = nn.BCEWithLogitsLoss(reduction=reduction)
                 loss = loss_fct(logits, labels.float())
                 logits_sigmoid = logits.sigmoid()

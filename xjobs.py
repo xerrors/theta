@@ -16,8 +16,8 @@ from xerrors.utils import get_gpu_by_user_input
 from xerrors.metrics import confidence_interval
 
 # 根据 run_config 生成所有的组合
-# run_id = f"RUN_{xerrors.cur_time()}"
-run_id = "RUN_2023-06-30_22-20-59"
+run_id = f"RUN_{xerrors.cur_time()}"
+# run_id = "RUN_2023-07-06_22-20-59"
 
 # To Test
 index = {
@@ -25,7 +25,6 @@ index = {
     "use_two_plm": "PLM2",
     "use_ner": "NER#",
     "use_rel": "R#",
-    # "use_ent_pred_rel": "",
     "use_gold_ent_val": "GoldEnt",
     "use_gold_filter_val": "GoldFilter",
     "use_filter_hard": "Hard",
@@ -34,6 +33,7 @@ index = {
     "max_epochs": "E",
     "use_rel_opt1": "R1#",
     "use_rel_opt2": "R2#",
+    "use_rel_opt3": "R3#",
     "use_filter_opt1": "F1#",
     "use_filter_opt2": "F2#",
     "use_filter_opt3": "F3#",
@@ -49,19 +49,28 @@ index = {
     "use_thres_plus": "ThresT+",
     "context_window": "CW#",
     "precision": "P",
+    # pre
+    "use_pre_rel": "PreR",
+    "use_pre_opt1": "P1#",
+    "use_pre_opt2": "P2#",
+    "use_pre_opt3": "P3#",
 
     # rate
     "filter_rate": "FR@",
     "rel_rate": "RR@",
     "ner_rate": "NR@",
-
     # addition
     "use_bio_embed": "BioEmbed",
     "use_normal_tag": "NormalTag",
     "use_o_appfix": "AppO",
     "use_filter_attn": "AttnF",
     "use_ent_tag_cross_attn": "ECA",
-
+    "use_rel_tag_cross_attn": "RCA",
+    "use_ner_hs": "NHS",
+    "use_crf": "CRF",
+    "use_tag_detach": "Detach",
+    "ent_attn_range": "AttnR#",
+    "use_loss_fix": "LossFix",
     # learning rate
     "task_lr": "LR2@",
     "ner_lr": "ELR@",
@@ -70,15 +79,16 @@ index = {
     "use_filter_pro": "FPro",
     "use_rel_sum_loss": "RSum",
     "use_filter_sum_loss": "FSum",
+    # test
+    "use_rel_strict": "$",
 }
 
-TAG = "Tauu"
+TAG = "Iota"
 SEEDS = [100, 200, 300, 400, 500]
 # SEEDS = [600, 700, 800, 900, 1000]
 
 # TODO START ======================================
-# use_rel_sum_loss
-# use_filter_sum_loss
+
 # TODO End ========================================
 
 
@@ -86,29 +96,28 @@ SEEDS = [100, 200, 300, 400, 500]
 run_config_test = dict(
     use_thres_val=True,
     test_opt1="last",
-    test_from_ckpt=['output/ouput-2023-07-02_11-43-49-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_14-05-36-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_16-27-54-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_18-49-56-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_21-12-48-Tauu-ECA/config.yaml', 'output/ouput-2023-07-02_23-35-20-Tauu-FLR#0.005/config.yaml', 'output/ouput-2023-07-03_01-59-19-Tauu-FLR#0.005/config.yaml', 'output/ouput-2023-07-03_04-23-05-Tauu-FLR#0.005/config.yaml', 'output/ouput-2023-07-03_06-46-49-Tauu-FLR#0.005/config.yaml', 'output/ouput-2023-07-03_09-10-42-Tauu-FLR#0.005/config.yaml'],
-    ent_pair_threshold=[0, 0.001, 0.01, 0.03, 0.05, 0.07],
+    batch_size=1,
+    test_from_ckpt=["output/ouput-2023-07-15_07-22-01-Thuuu-ECA-FSum-FR@0.01-LossFix","output/ouput-2023-07-15_04-56-27-Thuuu-ECA-FSum-FR@0.01-LossFix","output/ouput-2023-07-15_02-30-58-Thuuu-ECA-FSum-FR@0.01-LossFix","output/ouput-2023-07-15_00-06-03-Thuuu-ECA-FSum-FR@0.01-LossFix","output/ouput-2023-07-14_21-41-50-Thuuu-ECA-FSum-FR@0.01-LossFix"],
+    ent_pair_threshold=[0, 0.01, 0.001, 0.0005, 0.0001, 0.00001],
+    # ent_pair_threshold=0.001,
+    # use_rel_strict=[False, True],
 )
 
 # 多个配置项的多种子训练 ====================================
 run_config_train = dict(
-    # use_rel_sum_loss=True,
     # seed=SEEDS,
 )
 
 # 单个配置项的多种子训练 ====================================
 raw_run_configs = [
-    # dict(use_rel_sum_loss=True),
-    dict(use_filter_sum_loss=True, filter_rate=0.01),
-    # dict(use_rel_sum_loss=True, use_filter_sum_loss=True),
 ]
 
 # 单个配置项的默认种子训练 ==================================
 pre_run_configs = [
-    # dict(use_bio_embed=True, filter_lr=0.005),
-    # dict(use_bio_embed=True, filter_lr=0.005, rel_lr=0.00005),
-    # dict(use_bio_embed=True, filter_lr=0.05),
+
 ]
+    
+next_run_configs = [{}] # 默认跑一次 baseline
 
 run_configs = []
 for seed in SEEDS:
@@ -116,11 +125,8 @@ for seed in SEEDS:
         config["seed"] = seed
         run_configs.append(config.copy())
 
-run_configs = pre_run_configs + run_configs
-
 # ==================================================
 def get_all_combinations(run_config):
-
     if len(run_config) == 0:
         return []
 
@@ -140,9 +146,14 @@ def get_all_combinations(run_config):
 
 
 def refine_config(config, args):
-
     if args.test_mode:
-        with open(config['test_from_ckpt'], 'r') as f:
+        # 判断是否是个文件夹，如果是个文件夹，尝试从文件夹中找到 config.yaml
+        if os.path.isdir(config["test_from_ckpt"]):
+            config["test_from_ckpt"] = os.path.join(
+                config["test_from_ckpt"], "config.yaml"
+            )
+
+        with open(config["test_from_ckpt"], "r") as f:
             ckpt_config = yaml.load(f, Loader=yaml.FullLoader)
             config["tag"] = ckpt_config["tag"]
 
@@ -163,6 +174,9 @@ def refine_config(config, args):
     if args.fast_dev_run:
         config["fast_dev_run"] = args.fast_dev_run
 
+    if args.debug:
+        config["debug"] = args.debug
+
     config["output"] = args.output
 
     # GPU
@@ -175,10 +189,11 @@ def refine_config(config, args):
 
     return config
 
+
 def exec_main(config):
     # Log
-    task_tag_str = cp.magenta(config['tag'], bold=True)
-    cur_time_str = xerrors.cur_time('human')
+    task_tag_str = cp.magenta(config["tag"], bold=True)
+    cur_time_str = xerrors.cur_time("human")
     cp.info("XJOBS", cur_time_str + str("Runing: ") + task_tag_str)
     cp.print_json(config)
 
@@ -199,22 +214,24 @@ def exec_main(config):
 
     return result
 
+
 def avg_result(result, key_config):
-    '''Acg result from multiple runs with same tag'''
+    """Acg result from multiple runs with same tag"""
     result_list = defaultdict(list)
     for r in result:
-        tag = r['tag']
-        result_list[tag].append(r)
+        if r.get("test_f1") is not None:
+            tag = r["tag"]
+            result_list[tag].append(r)
 
     avg_result = []
     for tag, r in result_list.items():
         avg_r = {}
         for key, c in key_config.items():
             formatter = c["formatter"]
-            if isinstance(r[0].get(key, 'N/A'), (int, float)):
+            if isinstance(r[0].get(key, "N/A"), (int, float)):
                 avg_r[key] = formatter([i[key] for i in r])
             else:
-                avg_r[key] = (r[0].get(key) + f"({len(r)})") if r[0].get(key) else '-'
+                avg_r[key] = (r[0].get(key) + f"({len(r)})") if r[0].get(key) else "-"
 
         avg_result.append(avg_r)
 
@@ -225,9 +242,11 @@ def default_formatter(data):
     mean, h = confidence_interval(data)
     return f"{mean*100:.2f}"
 
+
 def conf_formatter(data):
     mean, h = confidence_interval(data)
     return f"{mean*100:.2f} ± {h*100:.2f}"
+
 
 def args_parser():
     parser = argparse.ArgumentParser(add_help=False)
@@ -236,8 +255,11 @@ def args_parser():
     parser.add_argument("--output", type=str, default="output", help="Output directory")
     parser.add_argument("--seed", type=int, default=-1, help="Random seed")
     parser.add_argument("--gpu", type=str, default="not specified")
+    parser.add_argument("--debug", action="store_true", help="Debug mode")
+    parser.add_argument("-y", action="store_true", help="Confirm to run")
     args, _ = parser.parse_known_args()
     return args
+
 
 args = args_parser()
 
@@ -250,7 +272,7 @@ if args.test_mode:
     run_configs = get_all_combinations(run_config_test)
 else:
     combinations = get_all_combinations(run_config_train)
-    run_configs = run_configs + combinations
+    run_configs = pre_run_configs + run_configs + combinations + next_run_configs
 
 
 results = []
@@ -259,10 +281,11 @@ for config in run_configs:
     cp.info("XJOBS", f"Config: {config['tag']} ${config.get('seed', 'N/A')}")
 
 # 确认，开始运行，输入y确认，其余取消
-option = input("Confirm to run? (y/n): ")
-if option != "y" and option != "Y":
-    cp.error("XJOBS", "Canceled!")
-    exit()
+if not args.debug and not args.y:
+    option = input("Confirm to run? (y/n): ")
+    if option != "y" and option != "Y":
+        cp.error("XJOBS", "Canceled!")
+        exit()
 
 for config in run_configs:
     result = exec_main(config)
@@ -270,11 +293,13 @@ for config in run_configs:
     result["tag"] = config["tag"]
     results.append(result)
 
-print([result.get("final_config") for result in results])
+
+if not args.test_mode:
+    print([result.get("final_config") for result in results])
 
 
 # 打印表格
-cur_time = xerrors.cur_time('human')
+cur_time = xerrors.cur_time("human")
 cp.success("XJOBS", "All Done! " + cur_time)
 
 table = PrettyTable()
@@ -286,24 +311,39 @@ def convert_keylist_to_dict(key_lists):
         if isinstance(key, dict):
             key_config[key["name"]] = key
         else:
-            key_config[key] = {
-                "name": key,
-                "formatter": default_formatter
-            }
+            key_config[key] = {"name": key, "formatter": default_formatter}
 
     return key_config
 
-key_lists = ["tag", {"name": "test_f1", "formatter": conf_formatter}, "test_p", "test_r", "ner_f1", "rel_f1", "best_f1"]
+
+key_lists = [
+    "tag",
+    {"name": "test_f1", "formatter": conf_formatter},
+    "test_p",
+    "test_r",
+    "ner_f1",
+    "rel_f1",
+    "best_f1",
+]
 key_config = convert_keylist_to_dict(key_lists)
 
 table.field_names = key_config.keys()
 for res in avg_result(results, key_config):
     row = []
     for key in key_config.keys():
-        value = res.get(key, 'N/A')
+        value = res.get(key, "N/A")
         row.append(value)
 
     table.add_row(row)
 
 table.align["tag"] = "l"
 print(table)
+
+
+run_dir = os.path.join(args.output, run_id)
+os.makedirs(run_dir, exist_ok=True)
+with open(os.path.join(run_dir, f"RUN_{xerrors.cur_time()}-results.txt"), "w") as f:
+    f.write(f"Run ID: {run_id}\n")
+    f.write(f"Time: {cur_time}\n")
+    f.write(f"Dirs: {[result.get('final_config') for result in results]}\n\n")
+    f.write(str(table))

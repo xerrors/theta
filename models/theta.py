@@ -1,9 +1,12 @@
 import math
+from re import T
+from numpy import tri
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from models.batch_filter import batch_filter
 from models.entity_pair_filter import FilterModel
+from models.pre_relation import PreREModel
 from models.re_model import REModel
 from models.ner_model import NERModel
 from models.runtime_graph import RuntimeGraph
@@ -138,6 +141,9 @@ class Theta(pl.LightningModule):
         # self.span_ner = SpanEntityModel(self)
         self.graph = RuntimeGraph(self) if config.use_graph_layers > 0 else None
 
+        if self.config.use_pre_rel:
+            self.pre_rel_model = PreREModel(config)
+
     def predict_step(self, sent: str, ansser=None):
         input_ids = self.tokenizer.encode(sent, add_special_tokens=True)
         input_ids = torch.tensor(input_ids).unsqueeze(0).to(self.device)
@@ -255,6 +261,18 @@ class Theta(pl.LightningModule):
         else:
             ner_logits, ner_loss = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask)
             entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
+            # ner_out = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask, return_hs=(self.config.use_ner_hs))
+            # ner_logits, ner_loss = ner_out[0], ner_out[1]
+            # if self.config.use_ner_hs:
+            #     hidden_state = ner_out[2]
+            # entities = self.ner_model.decode_entities(ent_maps, pos=pos, mask=sent_mask) # gold entities
+
+        if self.config.use_pre_rel and mode == "train":
+            pre_rel_loss, logits = self.pre_rel_model(hidden_state,
+                                              mask=sent_mask, 
+                                              rel_tag_embeds=self.get_rel_tag_embeddings(),
+                                              mode=mode,
+                                              triples=triples)
 
         # add entities to graph
         if self.graph is not None:
@@ -295,7 +313,7 @@ class Theta(pl.LightningModule):
             if self.config.use_spert:
                 entities = self.span_ner.decode_entities(ner_logits, span_mask, pos=pos)
             elif self.config.ner_rate > 0 and not self.config.use_gold_ent_val:
-                entities = self.ner_model.decode_entities(ner_logits, pos=pos)
+                entities = self.ner_model.decode_entities(ner_logits, pos=pos, mask=sent_mask)
 
             output["pred_entities"] = entities
 
@@ -313,13 +331,23 @@ class Theta(pl.LightningModule):
 
         # 计算损失
         if mode == "train":
-            loss = ner_loss * self.config.ner_rate + rel_loss * self.config.rel_rate
+            loss = ner_loss * self.config.ner_rate + rel_loss * self.config.rel_rate + filter_loss * self.config.filter_rate
             self.log("ner_loss", ner_loss)
             self.log("rel_loss", rel_loss)
             self.log("filter_loss", filter_loss) # type: ignore
-            loss += filter_loss * self.config.filter_rate
+            loss_weight = [self.config.ner_rate, self.config.rel_rate, self.config.filter_rate]
 
-            output["loss"] = loss / (self.config.ner_rate + self.config.rel_rate + self.config.filter_rate) * 3
+            if self.config.use_pre_rel:
+                loss += pre_rel_loss * self.config.pre_rel_rate
+                self.log("pre_rel_loss", pre_rel_loss)
+                loss_weight.append(self.config.pre_rel_rate)
+
+            if self.config.use_loss_fix:
+                loss = loss
+            else:
+                loss = loss / sum(loss_weight) * len(loss_weight)
+
+            output["loss"] = loss
 
         return output
 
@@ -457,3 +485,11 @@ class Theta(pl.LightningModule):
         for k, v in d.items():
             self.log(k, v, **kwargs)
 
+
+    def get_rel_tag_embeddings(self, with_na=False, with_grad=True):
+        rel_tag_embeddings = self.plm_model.get_input_embeddings().weight[self.rel_ids]
+        if not with_na:
+            rel_tag_embeddings = rel_tag_embeddings[1:]
+        if not with_grad:
+            rel_tag_embeddings = rel_tag_embeddings.detach()
+        return rel_tag_embeddings

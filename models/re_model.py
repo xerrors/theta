@@ -129,6 +129,7 @@ class REModel(pl.LightningModule):
         bio_tags = []
         rel_input_ids = []
         rel_positional_ids = []
+        # rel_positional_id2 = []
         rel_attention_mask = []
         ent_hidden_states = []
 
@@ -157,6 +158,7 @@ class REModel(pl.LightningModule):
 
             ids = [cls_token] + input_ids[b, sent_s:sent_e].tolist() + [sep_token]
             pos_ids = [b for b in range(sent_len+2)]
+            # pos_id2 = [b for b in range(sent_len+2)]
             masks = [1 for b in range(sent_len+2)]
 
             bio_ids = np.array([theta.ent_ids[0]] * (sent_len+2))
@@ -257,12 +259,14 @@ class REModel(pl.LightningModule):
 
                     ids += [mask_token, ss_tid, os_tid]
                     pos_ids += [mask_pos, ss_pid, os_pid]
+                    # pos_id2 += [mask_pos, se_pid, oe_pid]
                     bio_ids += [mask_bio_id, ss_bio_id, os_bio_id]
                     masks += [marker_mask] * 3
 
                     if self.config.use_rel_opt1.endswith("+"):
                         ids += [se_tid, oe_tid]
                         pos_ids += [se_pid, oe_pid]
+                        # pos_id2 += [se_pid, oe_pid]
                         bio_ids += [se_bio_id, oe_bio_id]
                         masks += [marker_mask] * 2
 
@@ -285,11 +289,13 @@ class REModel(pl.LightningModule):
 
             rel_input_ids.append(torch.tensor(ids))
             rel_positional_ids.append(torch.tensor(pos_ids))
+            # rel_positional_id2.append(torch.tensor(pos_id2))
             rel_attention_mask.append(torch.tensor(masks)) # 不要放到 cuda 上
             bio_tags.append(torch.tensor(bio_ids))
 
         rel_input_ids = nn.utils.rnn.pad_sequence(rel_input_ids, batch_first=True, padding_value=pad_token)
         rel_positional_ids = nn.utils.rnn.pad_sequence(rel_positional_ids, batch_first=True, padding_value=0)
+        # rel_positional_id2 = nn.utils.rnn.pad_sequence(rel_positional_id2, batch_first=True, padding_value=0)
         bio_tags = nn.utils.rnn.pad_sequence(bio_tags, batch_first=True, padding_value=theta.ent_ids[0])
 
         # 2D attention mask
@@ -316,9 +322,11 @@ class REModel(pl.LightningModule):
 
         rel_input_ids = rel_input_ids.to(device)
         rel_positional_ids = rel_positional_ids.to(device)
+        # rel_positional_id2 = rel_positional_id2.to(device)
         rel_attention_mask = rel_attention_mask.to(device)
         bio_tags = bio_tags.to(device)
         assert rel_positional_ids.max() <= 512 and rel_positional_ids.min() >= 0, "positional ids error"
+        # assert rel_positional_id2.max() <= 512 and rel_positional_id2.min() >= 0, "positional ids error"
         assert rel_input_ids.shape == rel_positional_ids.shape
 
         rel_hidden_states = []
@@ -353,8 +361,12 @@ class REModel(pl.LightningModule):
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
 
             # if self.config.use_rel_tag_cross_attn:
-            #     tag_embeddings = self.word_embeddings(torch.tensor(theta.ent_ids, device=device))
-            #     tag_embeddings = tag_embeddings.unsqueeze(0).unsqueeze(0).repeat(bsz, 1, 1, 1) # [bsz, 1, ent_num, hidden_size]
+            #     tag_embeddings = self.word_embeddings(torch.tensor(theta.rel_ids, device=device))
+            #     tag_embeddings = tag_embeddings.unsqueeze(0) # [1, 1, ent_num, hidden_size]
+
+            #     attn_out = self.cross_attn(rel_hidden_states.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
+            #     rel_hidden_states = self.layer_norm(rel_hidden_states + attn_out).squeeze(0)
+
 
             if self.config.use_rel_opt1 is str and self.config.use_rel_opt1.endswith("+"):
                 sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1] + rel_stage_hs[mask_pos[0], mask_pos[1]+3]
@@ -363,11 +375,11 @@ class REModel(pl.LightningModule):
                 sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
                 obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
 
-            if self.config.use_ent_pred_rel == "tag":
+            if self.config.use_rel_opt3 == "tag":
                 sub_hs = sub_tag_hs
                 obj_hs = obj_tag_hs
 
-            elif self.config.use_ent_pred_rel == "embed":
+            elif self.config.use_rel_opt3 == "embed":
                 sub_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
                 obj_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
                 sub_hs = rel_stage_hs[mask_pos[0], sub_pos_ids]
@@ -375,12 +387,22 @@ class REModel(pl.LightningModule):
                 sub_hs += sub_tag_hs
                 obj_hs += obj_tag_hs
 
-            elif self.config.use_ent_pred_rel == "embed2":
+            elif self.config.use_rel_opt3 == "embed2":
                 sub_hs = ent_hidden_states[:, 0, :] + sub_tag_hs
                 obj_hs = ent_hidden_states[:, 1, :] + obj_tag_hs
 
+            # elif rel_feature_config == "embed3":
+            #     ss_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
+            #     os_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
+            #     se_pos_ids = rel_positional_id2[mask_pos[0], mask_pos[1]+1]
+            #     oe_pos_ids = rel_positional_id2[mask_pos[0], mask_pos[1]+2]
+            #     sub_hs = rel_stage_hs[mask_pos[0], ss_pos_ids] + rel_stage_hs[mask_pos[0], se_pos_ids]
+            #     obj_hs = rel_stage_hs[mask_pos[0], os_pos_ids] + rel_stage_hs[mask_pos[0], oe_pos_ids]
+            #     sub_hs += sub_tag_hs
+            #     obj_hs += obj_tag_hs
+
             else:
-                raise NotImplementedError(f"ent_pred_rel: {self.config.use_ent_pred_rel} not implemented")
+                raise NotImplementedError(f"rel_opt3: {rel_feature_config} not implemented")
 
             if self.config.use_rel == 'mlp':
                 rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
