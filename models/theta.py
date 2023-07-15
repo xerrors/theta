@@ -1,9 +1,12 @@
 import math
+from re import T
+from numpy import tri
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
 from models.batch_filter import batch_filter
 from models.entity_pair_filter import FilterModel
+from models.pre_relation import PreREModel
 from models.re_model import REModel
 from models.ner_model import NERModel
 from models.runtime_graph import RuntimeGraph
@@ -66,6 +69,9 @@ class Theta(pl.LightningModule):
         ent_tokens = ["[O]"] + [f"[B-{e}]" for e in ents] + [f"[I-{e}]" for e in ents]
         special_tokens = ["[RC]"]
 
+        if config.use_normal_tag:
+            tag_tokens +=["[SS]", "[OS]", "[SE]", "[OE]"]
+
         # 扩展词表
         special_tokens_dict = {'additional_special_tokens': rel_tokens + ent_tokens + tag_tokens + special_tokens}
         self.tokenizer.add_special_tokens(special_tokens_dict)
@@ -110,6 +116,12 @@ class Theta(pl.LightningModule):
                 ace_tag_ids.insert(idx, self.tokenizer.encode("start " + ace_ent_map[ent], add_special_tokens=False))
                 ace_tag_ids.append(self.tokenizer.encode("end " + ace_ent_map[ent], add_special_tokens=False))
 
+            if config.use_normal_tag:
+                ace_tag_ids.append(self.tokenizer.encode("subject start", add_special_tokens=False))
+                ace_tag_ids.append(self.tokenizer.encode("object start", add_special_tokens=False))
+                ace_tag_ids.append(self.tokenizer.encode("subject end", add_special_tokens=False))
+                ace_tag_ids.append(self.tokenizer.encode("object end", add_special_tokens=False))
+
             for i, tag_id in enumerate(self.tag_ids):
                 embeds[tag_id] = embeds[ace_tag_ids[i]].mean(dim=-2) # type: ignore
                 if self.config.use_two_plm:
@@ -126,8 +138,11 @@ class Theta(pl.LightningModule):
         self.rel_model = REModel(self)
         self.ner_model = NERModel(self)
         self.filter = FilterModel(self)
-        self.span_ner = SpanEntityModel(self)
+        # self.span_ner = SpanEntityModel(self)
         self.graph = RuntimeGraph(self) if config.use_graph_layers > 0 else None
+
+        if self.config.use_pre_rel:
+            self.pre_rel_model = PreREModel(config)
 
     def predict_step(self, sent: str, ansser=None):
         input_ids = self.tokenizer.encode(sent, add_special_tokens=True)
@@ -185,11 +200,11 @@ class Theta(pl.LightningModule):
             sub_type = self.config.dataset.ents[sub_t]
             obj_type = self.config.dataset.ents[obj_t]
             pair_key = (sub_token, obj_token)
-            
+
             pair_name[pair_key] = max(score, pair_name.get(pair_key, 0))
 
         pairs = [key + (value,) for key, value in pair_name.items()]
-            
+
         rels = []
         rels_name = []
         # start, end 是左闭右开区间
@@ -246,6 +261,18 @@ class Theta(pl.LightningModule):
         else:
             ner_logits, ner_loss = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask)
             entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
+            # ner_out = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask, return_hs=(self.config.use_ner_hs))
+            # ner_logits, ner_loss = ner_out[0], ner_out[1]
+            # if self.config.use_ner_hs:
+            #     hidden_state = ner_out[2]
+            # entities = self.ner_model.decode_entities(ent_maps, pos=pos, mask=sent_mask) # gold entities
+
+        if self.config.use_pre_rel and mode == "train":
+            pre_rel_loss, logits = self.pre_rel_model(hidden_state,
+                                              mask=sent_mask, 
+                                              rel_tag_embeds=self.get_rel_tag_embeddings(),
+                                              mode=mode,
+                                              triples=triples)
 
         # add entities to graph
         if self.graph is not None:
@@ -286,7 +313,7 @@ class Theta(pl.LightningModule):
             if self.config.use_spert:
                 entities = self.span_ner.decode_entities(ner_logits, span_mask, pos=pos)
             elif self.config.ner_rate > 0 and not self.config.use_gold_ent_val:
-                entities = self.ner_model.decode_entities(ner_logits, pos=pos)
+                entities = self.ner_model.decode_entities(ner_logits, pos=pos, mask=sent_mask)
 
             output["pred_entities"] = entities
 
@@ -304,13 +331,23 @@ class Theta(pl.LightningModule):
 
         # 计算损失
         if mode == "train":
-            loss = ner_loss * self.config.ner_rate + rel_loss * self.config.rel_rate
+            loss = ner_loss * self.config.ner_rate + rel_loss * self.config.rel_rate + filter_loss * self.config.filter_rate
             self.log("ner_loss", ner_loss)
             self.log("rel_loss", rel_loss)
             self.log("filter_loss", filter_loss) # type: ignore
-            loss += filter_loss * self.config.filter_rate
+            loss_weight = [self.config.ner_rate, self.config.rel_rate, self.config.filter_rate]
 
-            output["loss"] = loss / (self.config.ner_rate + self.config.rel_rate + self.config.filter_rate) * 3
+            if self.config.use_pre_rel:
+                loss += pre_rel_loss * self.config.pre_rel_rate
+                self.log("pre_rel_loss", pre_rel_loss)
+                loss_weight.append(self.config.pre_rel_rate)
+
+            if self.config.use_loss_fix:
+                loss = loss
+            else:
+                loss = loss / sum(loss_weight) * len(loss_weight)
+
+            output["loss"] = loss
 
         return output
 
@@ -327,6 +364,9 @@ class Theta(pl.LightningModule):
 
         return loss
 
+    def training_epoch_end(self, outputs):
+        self.filter.log_filter_train_metrics()
+
     def validation_step(self, batch, batch_idx):
         output = self(batch, mode="dev")
         return self.eval_step_output(batch, output)
@@ -341,6 +381,8 @@ class Theta(pl.LightningModule):
         self.log_dict_values({'val_f1': f1, 'best_f1': self.best_f1}, on_epoch=True, prog_bar=True)
         self.log_dict_values({'val_ner_f1': ner_f1, 'val_ner_p': ner_p, 'val_ner_r': ner_r})
         self.log_dict_values({'val_rel_f1': rel_f1, 'val_rel_p': rel_p, 'val_rel_r': rel_r})
+        self.filter.log_filter_val_metrics()
+        self.rel_model.log_ent_pair_info()
 
     def test_step(self, batch, batch_idx):
         output = self(batch, mode="test")
@@ -363,6 +405,8 @@ class Theta(pl.LightningModule):
         self.log_dict_values({'test_f1': f1, 'test_p': p, 'test_r': r})
         self.log_dict_values({'test_ner_f1': ner_f1, 'test_ner_p': ner_p, 'test_ner_r': ner_r})
         self.log_dict_values({'test_rel_f1': rel_f1, 'test_rel_p': rel_p, 'test_rel_r': rel_r})
+        self.filter.log_filter_val_metrics()
+        self.rel_model.log_ent_pair_info()
 
     def eval_step_output(self, batch, output):
         # batch = batch_filter(batch, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id)
@@ -441,3 +485,11 @@ class Theta(pl.LightningModule):
         for k, v in d.items():
             self.log(k, v, **kwargs)
 
+
+    def get_rel_tag_embeddings(self, with_na=False, with_grad=True):
+        rel_tag_embeddings = self.plm_model.get_input_embeddings().weight[self.rel_ids]
+        if not with_na:
+            rel_tag_embeddings = rel_tag_embeddings[1:]
+        if not with_grad:
+            rel_tag_embeddings = rel_tag_embeddings.detach()
+        return rel_tag_embeddings

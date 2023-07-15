@@ -10,6 +10,7 @@ import torch
 import wandb
 import utils
 from data.data_module import DataModule
+from xerrors import cprint
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -31,9 +32,9 @@ def main(func_mode=False, **kwargs):
 
     # Trainer callbacks
     early_callback = pl.callbacks.EarlyStopping( # type: ignore
-        monitor="val_f1", mode="max", patience=10, check_on_train_epoch_end=False)
+        monitor="val_f1", mode="max", patience=30, check_on_train_epoch_end=False)
     model_checkpoint = pl.callbacks.ModelCheckpoint( # type: ignore
-        monitor="val_f1", mode="max",
+        monitor="val_f1", mode="max", save_last=True,
         filename='f1={val_f1:.4f}-epoch={epoch}',
         dirpath=os.path.join(config.output_dir, "checkpoints"),
         auto_insert_metric_name=False,
@@ -56,8 +57,14 @@ def main(func_mode=False, **kwargs):
 
     # 加载 checkpoint 测试
     if config.test_from_ckpt:
-        print(utils.yellow("Test from checkpoint..."))
-        trainer.test(ckpt_path=config.best_model_path, model=theta, datamodule=data)
+        if config.test_opt1 == "last":
+            assert config.last_model_path is not None, "last_model_path is None"
+            ckpt_path = config.last_model_path
+        elif config.test_opt1 == "best" or config.test_opt1 is None:
+            ckpt_path = config.best_model_path
+
+        # cprint.info("Test from checkpoint: ", ckpt_path)
+        trainer.test(ckpt_path=ckpt_path, model=theta, datamodule=data)
 
     else:
 
@@ -84,6 +91,7 @@ def main(func_mode=False, **kwargs):
         "rel_f1": theta.rel_f1,
         "rel_p": theta.rel_p,
         "rel_r": theta.rel_r,
+        "final_config": config.final_config
     }
 
     config.save_result(result)

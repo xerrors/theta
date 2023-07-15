@@ -32,31 +32,42 @@ class MultiNonLinearClassifier(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, embed_dim, num_heads=4):
+    """ Self attention Layer including mask and LayerNorm"""
+    def __init__(self, embed_dim, num_heads=4, use_mask=False, range=None):
         super(SelfAttention, self).__init__()
         self.multihead_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout=0.1, bias=True, batch_first=True)
         self.layer_norm = nn.LayerNorm(embed_dim)
+
         self.mask = None
+        if use_mask:    
+            self.use_mask = True # 兼容旧版本
+            self.range = range or 10
+        else:
+            self.use_mask = range and range > 0
+            self.range = range
 
     def create_mask(self, input_shape, input_device):
         
         mask = torch.zeros(input_shape[1], input_shape[1], device=input_device)
         for i in range(input_shape[1]):
             # mask[i, max(0, i-10):i+10] = 1.0
-            mask[i, i-10:i+10] = 1.0
+            # mask[i, i-10:i+10] = 1.0
+            mask[i, max(0, i-self.range):i+self.range] = 1.0
         # mask = mask.unsqueeze(0)
         self.mask = mask
 
     def forward(self, x):
         # 创建 mask 矩阵
-        if self.mask is None or self.mask.shape[0] < x.shape[1]:
-            self.create_mask(x.shape, x.device)
-            attn_mask = self.mask
-        elif self.mask.shape[0] >= x.shape[1]:
-            attn_mask = self.mask[:x.shape[1], :x.shape[1]].clone()
+        if self.use_mask:
+            if self.mask is None or self.mask.shape[0] < x.shape[1]:
+                self.create_mask(x.shape, x.device)
+                attn_mask = self.mask 
+            elif self.mask.shape[0] >= x.shape[1]:
+                attn_mask = self.mask[:x.shape[1], :x.shape[1]].clone()
+            else:
+                raise ValueError("Mask shape error.")
         else:
-            raise ValueError("Mask shape error.")
-        # attn_mask = None
+            attn_mask = None
 
         # 执行 self-attention 操作
         attn_output, _ = self.multihead_attn(x, x, x, attn_mask=attn_mask)

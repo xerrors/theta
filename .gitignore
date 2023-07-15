@@ -24,4 +24,4 @@ xerrors
 debug
 
 # jupyter
-test*.ipynb
+*.ipynb

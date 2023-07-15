@@ -1,18 +1,18 @@
 import itertools
 import math
 import torch
+import numpy as np
 import torch.nn as nn
 import pytorch_lightning as pl
 from models.components import MultiNonLinearClassifier, SelfAttention
 from models.functions import getPretrainedLMHead
 
-from utils.funcs import cosine_ease_in_out_minmax
-from utils.optimizers import calc_num_training_steps
 
 class REModel(pl.LightningModule):
 
     def __init__(self, theta):
         super().__init__()
+        self.log = theta.log
         self.config = theta.config
         self.rel_ids = theta.rel_ids
         self.ent_ids = theta.ent_ids
@@ -27,10 +27,18 @@ class REModel(pl.LightningModule):
                 self.lmhead = getPretrainedLMHead(theta.plm_model, config.model)
 
         elif config.use_rel == 'linear':
+            # TODO Linear + LMHead
             self.classifier = nn.Linear(hidden_size, len(self.rel_ids))
 
+        elif config.use_rel == 'mlp':
+            # if config.use_rel_tag_cross_attn:
+            #     self.word_embeddings = theta.plm_model.get_input_embeddings()
+            #     self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
+            #     self.layer_norm = nn.LayerNorm(hidden_size)
+            self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
+
         else:
-            self.classifier = MultiNonLinearClassifier(hidden_size, len(self.rel_ids))
+            raise NotImplementedError(f"config.use_rel = {config.use_rel} is not implemented")
 
         self.grt_count = 0
         self.hit_count = 0
@@ -38,7 +46,10 @@ class REModel(pl.LightningModule):
         self.cur_epoch = 0
         self.pre_mode = None
         self.filter_score = {} # p, r, f1
-        self.rel_type_num = len(self.config.dataset.ents)
+        self.rel_type_num = len(self.config.dataset.rels)
+        self.ent_type_num = len(self.config.dataset.ents)
+
+        self.loss_weight = torch.FloatTensor([config.get("na_rel_weight", 1)] + [1] * self.rel_type_num)
 
     def get_triples_label(self, triples, device, ent_groups, mode, epoch):
         """Get the labels of triples.
@@ -99,11 +110,12 @@ class REModel(pl.LightningModule):
         # 如果启用 use_thres_val，则验证阶段使用的都是置信度高的实体对
         # 暂时使用 calc_num_training_steps 来反复计算，如果后面正式效果可行，再优化这部分的代码
         cur_threshold = -1
-        if self.config.use_thres_val and mode != 'train':
-            assert self.config.ent_pair_threshold >= 0, "ent_pair_threshold must be >= 0"
-            cur_threshold = self.config.ent_pair_threshold
-        elif mode != 'train' and mode != "predict":
-            cur_threshold = 0.001
+        if self.config.use_filter and mode != 'train':
+            if self.config.use_thres_val:
+                assert self.config.ent_pair_threshold >= 0, "ent_pair_threshold must be >= 0"
+                cur_threshold = self.config.ent_pair_threshold
+            elif mode != "predict":
+                cur_threshold = 0.001  # default validation threshold
 
         if mode != "predict":
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
@@ -114,9 +126,12 @@ class REModel(pl.LightningModule):
 
         max_len= 1024
         ent_groups = []
+        bio_tags = []
         rel_input_ids = []
         rel_positional_ids = []
+        # rel_positional_id2 = []
         rel_attention_mask = []
+        ent_hidden_states = []
 
         cls_token = theta.tokenizer.cls_token_id
         sep_token = theta.tokenizer.sep_token_id
@@ -143,27 +158,52 @@ class REModel(pl.LightningModule):
 
             ids = [cls_token] + input_ids[b, sent_s:sent_e].tolist() + [sep_token]
             pos_ids = [b for b in range(sent_len+2)]
+            # pos_id2 = [b for b in range(sent_len+2)]
             masks = [1 for b in range(sent_len+2)]
+
+            bio_ids = np.array([theta.ent_ids[0]] * (sent_len+2))
+            for e in entity:
+                bio_ids[e[0]-sent_s+1] = theta.ent_ids[e[2] + 1]
+                bio_ids[e[0]-sent_s+2:e[1]-sent_s+1] = theta.ent_ids[e[2] + self.ent_type_num + 1]
+
+            bio_ids = bio_ids.tolist()
 
             # 先构建一个初始的实体组，然后按照置信度排序，能排多少是多少
             if mode != "predict":
-                gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode)
                 pred_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
+                gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode, pred=logits if self.config.use_thres_plus else None)
 
-                # 如果当前的 epoch 大于最大的 epochs 的 1/3 的时候，就开始使用阈值过滤
                 count = len(gold_draft_ent_groups)
                 if self.config.use_thres_train and mode == "train":
+                    l = 2
+                    ent_count = len(entity)
                     r = self.filter_score.get("recall", 0)
-                    pred_count = len([1 for e in pred_draft_ent_groups if e[-1] > 0.5]) # use 0.1 as threshold TODO
-                    # c = max(\theta, c - c * r + \hat{c} * r)
-                    count = max(5, int(count - count * r + pred_count * 2 * r))
+                    pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.5])
+                    min_count = 5
+
+                    if self.config.use_filter_opt5 and self.config.use_filter_opt5.startswith("u"):
+                        l = int(self.config.use_filter_opt5[1:])
+                        r = theta.filter.train_metrics.get("recall", 0) # note recall is lower than the pred count
+                        pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.5])
+                    elif self.config.use_filter_opt5 and self.config.use_filter_opt5.startswith("x"):
+                        l = int(self.config.use_filter_opt5[1:])
+                        r = theta.filter.train_metrics.get("recall", 0)
+                        pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.8])
+
+                    # 2023-0510
+                    count = max(min_count, int(count - count * r + pred_count * l * r))
+                    opt3 = self.config.use_filter_opt3
+                    if opt3 == "0511":
+                        count = max(min_count, int(count * (1 - r) + (l + (1 - l) * r) * r * pred_count))
+                    elif opt3 == "0513":
+                        count = max(ent_count, int(count - count * r + pred_count * l * r))
 
                 if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
                     draft_ent_groups = gold_draft_ent_groups[:count]
                 else:
                     draft_ent_groups = pred_draft_ent_groups
 
-                gold_count = len([1 for e in gold_draft_ent_groups if e[-1] != 0])
+                gold_count = len([1 for e in gold_draft_ent_groups if e[2] != 0])
                 assert gold_count == 0 or gold_count != len(gold_draft_ent_groups), "不对劲"
                 assert gold_count == 0 or len(ids) + gold_count * 3 <= max_len, "实体过多，超过最大长度"
 
@@ -176,29 +216,87 @@ class REModel(pl.LightningModule):
                 obj_s, obj_e, obj_t = ent_pair[1][:3]
                 score = ent_pair[2]
 
-                if len(ids) + 3 <= max_len and score > cur_threshold:  # 当设置 filter_rate 为 0 时，仅包含正确的实体对
+                if len(ids) + 5 <= max_len and score > cur_threshold:  # 当设置 filter_rate 为 0 时，仅包含正确的实体对
                     marker_mask += 1
-                    ss_tid = theta.tag_ids[sub_t]
-                    os_tid = theta.tag_ids[obj_t]
-                    se_tid = theta.tag_ids[sub_t + self.rel_type_num]
-                    oe_tid = theta.tag_ids[obj_t + self.rel_type_num]
+                    if self.config.use_bio_embed and self.config.use_normal_tag:
+                        ss_tid = theta.tag_ids[self.ent_type_num * 2]
+                        os_tid = theta.tag_ids[self.ent_type_num * 2 + 1]
+                        se_tid = theta.tag_ids[self.ent_type_num * 2 + 2]
+                        oe_tid = theta.tag_ids[self.ent_type_num * 2 + 3]
+
+                    else:
+                        ss_tid = theta.tag_ids[sub_t]
+                        os_tid = theta.tag_ids[obj_t]
+                        se_tid = theta.tag_ids[sub_t + self.ent_type_num]
+                        oe_tid = theta.tag_ids[obj_t + self.ent_type_num]
+
+                    if self.config.use_bio_embed and self.config.use_o_appfix:
+                        mask_bio_id = theta.ent_ids[0]
+                        ss_bio_id = theta.ent_ids[0]
+                        os_bio_id = theta.ent_ids[0]
+                        se_bio_id = theta.ent_ids[0]
+                        oe_bio_id = theta.ent_ids[0]
+                    else:
+                        mask_bio_id = theta.ent_ids[0]
+                        ss_bio_id = theta.ent_ids[sub_t + 1]
+                        os_bio_id = theta.ent_ids[obj_t + 1]
+                        se_bio_id = theta.ent_ids[sub_t + self.ent_type_num + 1]
+                        oe_bio_id = theta.ent_ids[obj_t + self.ent_type_num + 1]
+
                     ss_pid = sub_s - sent_s
                     os_pid = obj_s - sent_s
                     se_pid = sub_e - sent_s + 2
                     oe_pid = obj_e - sent_s + 2
 
+                    if not self.config.use_rel_opt1 or self.config.use_rel_opt1.startswith("obj"):
+                        mask_pos = os_pid
+                    elif self.config.use_rel_opt1.startswith("sub"):
+                        mask_pos = ss_pid
+                    elif self.config.use_rel_opt1.startswith("mid"):
+                        mask_pos = int((ss_pid + os_pid) / 2)
+                    else:
+                        raise Exception(f"use_rel_opt1 参数错误: {self.config.use_rel_opt1}")
+
                     ids += [mask_token, ss_tid, os_tid]
-                    pos_ids += [os_pid, ss_pid, os_pid]
+                    pos_ids += [mask_pos, ss_pid, os_pid]
+                    # pos_id2 += [mask_pos, se_pid, oe_pid]
+                    bio_ids += [mask_bio_id, ss_bio_id, os_bio_id]
                     masks += [marker_mask] * 3
+
+                    if self.config.use_rel_opt1.endswith("+"):
+                        ids += [se_tid, oe_tid]
+                        pos_ids += [se_pid, oe_pid]
+                        # pos_id2 += [se_pid, oe_pid]
+                        bio_ids += [se_bio_id, oe_bio_id]
+                        masks += [marker_mask] * 2
+
+                    if self.config.use_rel_opt2 == "max":  # default head, options: head, tail, max, mean
+                        ent_hidden_states.append(torch.stack([
+                            hidden_state[b, sub_s:sub_e].max(dim=0)[0],
+                            hidden_state[b, obj_s:obj_e].max(dim=0)[0]])) # 最大池化
+                    elif self.config.use_rel_opt2 == "mean":
+                        ent_hidden_states.append(torch.stack([
+                            hidden_state[b, sub_s:sub_e].mean(dim=0),
+                            hidden_state[b, obj_s:obj_e].mean(dim=0)]))
+                    elif self.config.use_rel_opt2 == "head" or not self.config.use_rel_opt2: # default head
+                        ent_hidden_states.append(torch.stack([
+                            hidden_state[b, sub_s],
+                            hidden_state[b, obj_s]])) # 取第一个 token
+                    else:
+                        raise NotImplementedError(f"rel_opt2: {self.config.use_rel_opt2} not implemented")
 
                     ent_groups.append([b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t, score])
 
             rel_input_ids.append(torch.tensor(ids))
             rel_positional_ids.append(torch.tensor(pos_ids))
+            # rel_positional_id2.append(torch.tensor(pos_id2))
             rel_attention_mask.append(torch.tensor(masks)) # 不要放到 cuda 上
+            bio_tags.append(torch.tensor(bio_ids))
 
         rel_input_ids = nn.utils.rnn.pad_sequence(rel_input_ids, batch_first=True, padding_value=pad_token)
         rel_positional_ids = nn.utils.rnn.pad_sequence(rel_positional_ids, batch_first=True, padding_value=0)
+        # rel_positional_id2 = nn.utils.rnn.pad_sequence(rel_positional_id2, batch_first=True, padding_value=0)
+        bio_tags = nn.utils.rnn.pad_sequence(bio_tags, batch_first=True, padding_value=theta.ent_ids[0])
 
         # 2D attention mask
         padding_length = rel_input_ids.shape[1]
@@ -224,17 +322,34 @@ class REModel(pl.LightningModule):
 
         rel_input_ids = rel_input_ids.to(device)
         rel_positional_ids = rel_positional_ids.to(device)
+        # rel_positional_id2 = rel_positional_id2.to(device)
         rel_attention_mask = rel_attention_mask.to(device)
+        bio_tags = bio_tags.to(device)
         assert rel_positional_ids.max() <= 512 and rel_positional_ids.min() >= 0, "positional ids error"
+        # assert rel_positional_id2.max() <= 512 and rel_positional_id2.min() >= 0, "positional ids error"
         assert rel_input_ids.shape == rel_positional_ids.shape
 
         rel_hidden_states = []
 
         if len(ent_groups) != 0:
+            # 1. ent hidden state
+            ent_hidden_states = torch.stack(ent_hidden_states) # [ent_num, 2, hidden_size]
+
+            if self.config.use_bio_embed:
+                rel_inputs_embeds = self.bert_embeddings_with_bio_tag_embedding(
+                    theta.plm_model.bert.embeddings.word_embeddings,
+                    bio_tags=bio_tags,
+                    input_ids=rel_input_ids
+                )
+            else:
+                rel_inputs_embeds = None
+                assert rel_input_ids is not None
+
             # 2. 重新计算 hidden state
             plm_model = theta.plm_model_for_re if self.config.use_two_plm else theta.plm_model
             outputs = plm_model(
-                        rel_input_ids, # torch.Size([8, 607])
+                        input_ids=rel_input_ids if not self.config.use_bio_embed else None, # torch.Size([8, 607])
+                        inputs_embeds=rel_inputs_embeds,
                         attention_mask=rel_attention_mask, # torch.Size([8, 607, 607])
                         position_ids=rel_positional_ids, # torch.Size([8, 607]),
                         token_type_ids = torch.zeros(rel_input_ids.shape[:2], dtype=torch.long, device=device),
@@ -245,16 +360,53 @@ class REModel(pl.LightningModule):
             mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
 
-            if self.config.use_ent_pred_rel == "tag":
+            # if self.config.use_rel_tag_cross_attn:
+            #     tag_embeddings = self.word_embeddings(torch.tensor(theta.rel_ids, device=device))
+            #     tag_embeddings = tag_embeddings.unsqueeze(0) # [1, 1, ent_num, hidden_size]
+
+            #     attn_out = self.cross_attn(rel_hidden_states.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
+            #     rel_hidden_states = self.layer_norm(rel_hidden_states + attn_out).squeeze(0)
+
+
+            if self.config.use_rel_opt1 is str and self.config.use_rel_opt1.endswith("+"):
+                sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1] + rel_stage_hs[mask_pos[0], mask_pos[1]+3]
+                obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2] + rel_stage_hs[mask_pos[0], mask_pos[1]+4]
+            else:
                 sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
                 obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
-                rel_hidden_states += sub_tag_hs - obj_tag_hs
 
-            elif self.config.use_ent_pred_rel == "embed":
+            if self.config.use_rel_opt3 == "tag":
+                sub_hs = sub_tag_hs
+                obj_hs = obj_tag_hs
+
+            elif self.config.use_rel_opt3 == "embed":
                 sub_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
                 obj_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
                 sub_hs = rel_stage_hs[mask_pos[0], sub_pos_ids]
                 obj_hs = rel_stage_hs[mask_pos[0], obj_pos_ids]
+                sub_hs += sub_tag_hs
+                obj_hs += obj_tag_hs
+
+            elif self.config.use_rel_opt3 == "embed2":
+                sub_hs = ent_hidden_states[:, 0, :] + sub_tag_hs
+                obj_hs = ent_hidden_states[:, 1, :] + obj_tag_hs
+
+            # elif rel_feature_config == "embed3":
+            #     ss_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
+            #     os_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
+            #     se_pos_ids = rel_positional_id2[mask_pos[0], mask_pos[1]+1]
+            #     oe_pos_ids = rel_positional_id2[mask_pos[0], mask_pos[1]+2]
+            #     sub_hs = rel_stage_hs[mask_pos[0], ss_pos_ids] + rel_stage_hs[mask_pos[0], se_pos_ids]
+            #     obj_hs = rel_stage_hs[mask_pos[0], os_pos_ids] + rel_stage_hs[mask_pos[0], oe_pos_ids]
+            #     sub_hs += sub_tag_hs
+            #     obj_hs += obj_tag_hs
+
+            else:
+                raise NotImplementedError(f"rel_opt3: {rel_feature_config} not implemented")
+
+            if self.config.use_rel == 'mlp':
+                rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
+            else:
                 rel_hidden_states += sub_hs - obj_hs
 
         if mode != 'predict':
@@ -267,20 +419,6 @@ class REModel(pl.LightningModule):
         return ent_groups, rel_hidden_states, triple_labels, filter_loss
 
     def forward(self, theta, batch, hidden_state, entities=None, return_loss=False, mode="train", with_score=False):
-
-        # if self.config.use_rel_opt1 == "filter":
-        #     prepare = self.prepare
-        # elif self.config.use_rel_opt1 == "batch":
-        #     prepare = self.prepare_one_sent
-        # else:
-        #     raise NotImplementedError("use_rel_opt1: {} not implemented".format(self.config.use_rel_opt1))
-
-        # output = prepare(
-        #             theta=theta,
-        #             batch=batch,
-        #             hidden_state=hidden_state,
-        #             entities=entities,
-        #             mode=mode)
 
         output = self.prepare(
                     theta=theta,
@@ -295,16 +433,16 @@ class REModel(pl.LightningModule):
         所体现的是关系抽取和实体过滤工作作用下的结果
         最终的 F1 在 PR 相差不大的情况下，可以理解为 hit_rate * rel_f1
         '''
-        if mode != 'train' and mode != 'predict' and (mode != self.pre_mode or mode == 'test'):
-            self.filter_score["precision"] = self.hit_count / (self.rel_count + 1e-8)
-            self.filter_score["recall"] = self.hit_count / (self.grt_count + 1e-8)
-            self.filter_score["f1"] = 2 * self.hit_count / (self.grt_count + self.rel_count + 1e-8)
-            theta.log("info/pair_precision", self.filter_score["precision"])
-            theta.log("info/pair_recall", self.filter_score["recall"])
-            theta.log("info/pair_f1", self.filter_score["f1"])
-            self.hit_count = 0
-            self.grt_count = 0
-            self.rel_count = 0
+        # if mode != 'train' and mode != 'predict' and (mode != self.pre_mode or mode == 'test'):
+        #     self.filter_score["precision"] = self.hit_count / (self.rel_count + 1e-8)
+        #     self.filter_score["recall"] = self.hit_count / (self.grt_count + 1e-8)
+        #     self.filter_score["f1"] = 2 * self.hit_count / (self.grt_count + self.rel_count + 1e-8)
+        #     theta.log("info/pair_precision", self.filter_score["precision"])
+        #     theta.log("info/pair_recall", self.filter_score["recall"])
+        #     theta.log("info/pair_f1", self.filter_score["f1"])
+        #     self.hit_count = 0
+        #     self.grt_count = 0
+        #     self.rel_count = 0
 
         self.pre_mode = mode
 
@@ -341,19 +479,30 @@ class REModel(pl.LightningModule):
 
         rel_loss = torch.tensor(0.0).to(logits.device)
         if triple_labels is not None and return_loss:
-            loss_fct = nn.CrossEntropyLoss(reduction='mean')
+            reduction = 'sum' if self.config.use_rel_sum_loss else 'mean'
+            loss_fct = nn.CrossEntropyLoss(reduction=reduction, weight=self.loss_weight.to(logits.device))
             new_logits = logits.view(-1, len(self.rel_ids))
             new_labels = triple_labels.view(-1)
 
             rel_loss = loss_fct(new_logits, new_labels)
 
             return (triples_pred, rel_loss, filter_loss)
-        
+
         if mode == "predict":
             return (triples_pred, ent_groups)
 
         return (triples_pred,)
 
+    def log_ent_pair_info(self):
+        self.filter_score["precision"] = self.hit_count / (self.rel_count + 1e-8)
+        self.filter_score["recall"] = self.hit_count / (self.grt_count + 1e-8)
+        self.filter_score["f1"] = 2 * self.hit_count / (self.grt_count + self.rel_count + 1e-8)
+        self.log("info/pair_precision", self.filter_score["precision"])
+        self.log("info/pair_recall", self.filter_score["recall"])
+        self.log("info/pair_f1", self.filter_score["f1"])
+        self.hit_count = 0
+        self.grt_count = 0
+        self.rel_count = 0
 
     # def prepare_one_sent(self, theta, batch, hidden_state, entities, mode):
 
@@ -474,3 +623,22 @@ class REModel(pl.LightningModule):
     #     mask_pos = torch.where(bid == theta.tokenizer.mask_token_id)
     #     mask_hs = rel_stage_hs[mask_pos[0], mask_pos[1]]
     #     return mask_hs
+
+
+    def bert_embeddings_with_bio_tag_embedding(self,
+        word_embeddings = None,
+        bio_tags = None,
+        input_ids = None,
+    ) -> torch.Tensor:
+
+        assert word_embeddings is not None
+        assert input_ids is not None
+
+        # [batch_size, seq_len, hidden_size]
+        bert_embeddings = word_embeddings(input_ids)
+        bio_tags_embeddings = word_embeddings(bio_tags)
+
+        # [batch_size, seq_len, hidden_size]
+        bert_embeddings = bert_embeddings + bio_tags_embeddings
+
+        return bert_embeddings

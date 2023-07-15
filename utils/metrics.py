@@ -4,6 +4,10 @@ def f1_score(outputs, pred_name, gold_name):
     gold = 0
     correct = 0
 
+    # fp_count = 1e-8
+    # fn_count = 1e-8
+    # fc_count = 1e-8
+
     # TODO Shit 使用 Set 会导致分数比别人低，有的 Ground Truth 是重复的，实体也是！！！！
 
     for val_out in outputs:
@@ -13,10 +17,47 @@ def f1_score(outputs, pred_name, gold_name):
         gold += len(gold_triples)
         correct += len(set(pred_triples) & set(gold_triples))
 
+        # g_minus_p = gold_triples - pred_triples
+        # p_minus_g = pred_triples - gold_triples
+
+        # g_p_pair = set(t[:2] for t in g_minus_p)
+        # p_g_pair = set(t[:2] for t in p_minus_g)
+
+        # fc = g_p_pair & p_g_pair
+        # fp = p_minus_g - fc
+        # fn = g_minus_p - fc
+
+        # fp_count += len(fp)
+        # fn_count += len(fn)
+        # fc_count += len(fc)
+
     precision = correct / (pred + 1e-8)
     recall = correct / (gold + 1e-8)
     f1 = 2 * precision * recall / (precision + recall + 1e-8)
+
+    # f_total = fp_count + fc_count + fn_count
+    # print(f"False Positive: {fp_count / f_total:.2f}")
+    # print(f"False Negative: {fn_count / f_total:.2f}")
+    # print(f"Wrong Class: {fc_count / f_total:.2f}")
+
     return f1, precision, recall
+
+def f1_score_simple(labels, pred, ignore_index=0):
+    # labels = [0, 2, 1, 3, 2, 1, 0, 0, 1]
+    # pred = [0, 2, 0, 3, 1, 0, 1, 4, 1]
+
+    gold_count = sum(labels != 0)
+    pred_count = sum(pred != 0)
+
+    zero = sum((labels | pred) == 0)
+    correct = sum(labels == pred) - zero
+
+    precision = correct / (pred_count + 1e-8)
+    recall = correct / (gold_count + 1e-8)
+    f1 = 2 * precision * recall / (precision + recall + 1e-8)
+    return f1, precision, recall
+
+
 
 
 # def f1_score(outputs, consider_conf=True, threshold=0.5):
