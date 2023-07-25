@@ -16,8 +16,8 @@ from xerrors.utils import get_gpu_by_user_input
 from xerrors.metrics import confidence_interval
 
 # 根据 run_config 生成所有的组合
-run_id = f"RUN_{xerrors.cur_time()}"
-# run_id = "RUN_2023-07-06_22-20-59"
+# run_id = f"RUN_{xerrors.cur_time()}"
+run_id = "RUN_2023-07-22_00-02-52"
 
 # To Test
 index = {
@@ -40,7 +40,9 @@ index = {
     "use_filter_opt4": "F4#",
     "use_filter_opt5": "F5#",
     "use_filter_opt6": "F6#",
+    "use_filter_pro": "FPro",
     "use_filter_label_enhance": "LabelEn",
+    "use_filter_attn": "AttnF",
     "use_ent_attn": "AttnE",
     "ent_pair_threshold": "T#",
     "use_spert": "SpERT",
@@ -55,6 +57,9 @@ index = {
     "use_pre_opt2": "P2#",
     "use_pre_opt3": "P3#",
 
+    # loss
+    "use_semantic_loss": "SemLoss#",
+
     # rate
     "filter_rate": "FR@",
     "rel_rate": "RR@",
@@ -63,7 +68,6 @@ index = {
     "use_bio_embed": "BioEmbed",
     "use_normal_tag": "NormalTag",
     "use_o_appfix": "AppO",
-    "use_filter_attn": "AttnF",
     "use_ent_tag_cross_attn": "ECA",
     "use_rel_tag_cross_attn": "RCA",
     "use_ner_hs": "NHS",
@@ -76,14 +80,14 @@ index = {
     "ner_lr": "ELR@",
     "rel_lr": "RLR@",
     "filter_lr": "FLR@",
-    "use_filter_pro": "FPro",
     "use_rel_sum_loss": "RSum",
     "use_filter_sum_loss": "FSum",
+    "batch_size": "BS",
     # test
     "use_rel_strict": "$",
 }
 
-TAG = "Iota"
+TAG = "Chi"
 SEEDS = [100, 200, 300, 400, 500]
 # SEEDS = [600, 700, 800, 900, 1000]
 
@@ -92,32 +96,39 @@ SEEDS = [100, 200, 300, 400, 500]
 # TODO End ========================================
 
 
-# 用于测试的配置 ===================================
+# ! 1. 测试 ===========================================
 run_config_test = dict(
     use_thres_val=True,
     test_opt1="last",
     batch_size=1,
-    test_from_ckpt=["output/ouput-2023-07-15_07-22-01-Thuuu-ECA-FSum-FR@0.01-LossFix","output/ouput-2023-07-15_04-56-27-Thuuu-ECA-FSum-FR@0.01-LossFix","output/ouput-2023-07-15_02-30-58-Thuuu-ECA-FSum-FR@0.01-LossFix","output/ouput-2023-07-15_00-06-03-Thuuu-ECA-FSum-FR@0.01-LossFix","output/ouput-2023-07-14_21-41-50-Thuuu-ECA-FSum-FR@0.01-LossFix"],
+    test_from_ckpt=['output/ouput-2023-07-22_23-24-37-Iotaa/config.yaml', 'output/ouput-2023-07-23_01-45-28-Iotaa/config.yaml', 'output/ouput-2023-07-23_04-07-12-Iotaa/config.yaml', 'output/ouput-2023-07-23_06-26-30-Iotaa/config.yaml', 'output/ouput-2023-07-23_08-44-57-Iotaa/config.yaml'],
     ent_pair_threshold=[0, 0.01, 0.001, 0.0005, 0.0001, 0.00001],
     # ent_pair_threshold=0.001,
     # use_rel_strict=[False, True],
 )
 
-# 多个配置项的多种子训练 ====================================
+# ! 2. 多配置 多种子 ====================================
 run_config_train = dict(
-    # seed=SEEDS,
+    # batch_size=4,
+    # use_rel_tag_cross_attn=True,
+    # use_semantic_loss="cos",
+    # use_filter_attn="a3",
+    seed=SEEDS,
 )
 
-# 单个配置项的多种子训练 ====================================
+# ! 3. 单配置 多种子 ====================================
 raw_run_configs = [
+    # dict(ent_attn_range=5),
+    # dict(use_rel_tag_cross_attn=True, use_pre_rel=True, use_pre_opt2="cat"),
 ]
 
-# 单个配置项的默认种子训练 ==================================
+# ! 4. 前置任务 =============================================
 pre_run_configs = [
 
 ]
-    
-next_run_configs = [{}] # 默认跑一次 baseline
+
+# ! 5. 后置任务 =============================================
+next_run_configs = [] # 默认跑一次 baseline
 
 run_configs = []
 for seed in SEEDS:

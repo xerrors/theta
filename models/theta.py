@@ -269,7 +269,7 @@ class Theta(pl.LightningModule):
 
         if self.config.use_pre_rel and mode == "train":
             pre_rel_loss, logits = self.pre_rel_model(hidden_state,
-                                              mask=sent_mask, 
+                                              mask=sent_mask,
                                               rel_tag_embeds=self.get_rel_tag_embeddings(),
                                               mode=mode,
                                               triples=triples)
@@ -300,7 +300,7 @@ class Theta(pl.LightningModule):
                                 return_loss=True,
                                 mode=mode)
 
-            triples_pred, rel_loss, filter_loss = rel_output
+            triples_pred, rel_loss, filter_loss, semantic_loss = rel_output
             output["triples_pred_with_gold"] = triples_pred
 
         else:
@@ -335,17 +335,14 @@ class Theta(pl.LightningModule):
             self.log("ner_loss", ner_loss)
             self.log("rel_loss", rel_loss)
             self.log("filter_loss", filter_loss) # type: ignore
-            loss_weight = [self.config.ner_rate, self.config.rel_rate, self.config.filter_rate]
 
             if self.config.use_pre_rel:
                 loss += pre_rel_loss * self.config.pre_rel_rate
                 self.log("pre_rel_loss", pre_rel_loss)
-                loss_weight.append(self.config.pre_rel_rate)
 
-            if self.config.use_loss_fix:
-                loss = loss
-            else:
-                loss = loss / sum(loss_weight) * len(loss_weight)
+            if self.config.use_semantic_loss:
+                loss += semantic_loss * self.config.semantic_rate
+                self.log("semantic_loss", semantic_loss)
 
             output["loss"] = loss
 
@@ -486,8 +483,9 @@ class Theta(pl.LightningModule):
             self.log(k, v, **kwargs)
 
 
-    def get_rel_tag_embeddings(self, with_na=False, with_grad=True):
-        rel_tag_embeddings = self.plm_model.get_input_embeddings().weight[self.rel_ids]
+    def get_rel_tag_embeddings(self, with_na=False, with_grad=True, device=None):
+        device = device or self.device
+        rel_tag_embeddings = self.plm_model.get_input_embeddings().weight[torch.tensor(self.rel_ids, device=self.device)]
         if not with_na:
             rel_tag_embeddings = rel_tag_embeddings[1:]
         if not with_grad:

@@ -39,7 +39,7 @@ class SelfAttention(nn.Module):
         self.layer_norm = nn.LayerNorm(embed_dim)
 
         self.mask = None
-        if use_mask:    
+        if use_mask:
             self.use_mask = True # 兼容旧版本
             self.range = range or 10
         else:
@@ -47,7 +47,7 @@ class SelfAttention(nn.Module):
             self.range = range
 
     def create_mask(self, input_shape, input_device):
-        
+
         mask = torch.zeros(input_shape[1], input_shape[1], device=input_device)
         for i in range(input_shape[1]):
             # mask[i, max(0, i-10):i+10] = 1.0
@@ -61,7 +61,7 @@ class SelfAttention(nn.Module):
         if self.use_mask:
             if self.mask is None or self.mask.shape[0] < x.shape[1]:
                 self.create_mask(x.shape, x.device)
-                attn_mask = self.mask 
+                attn_mask = self.mask
             elif self.mask.shape[0] >= x.shape[1]:
                 attn_mask = self.mask[:x.shape[1], :x.shape[1]].clone()
             else:

@@ -23,6 +23,7 @@ class FilterModel(pl.LightningModule):
         self.labels = None
         self.pred_val = None
         self.labels_val = None
+        hidden_size = self.config.model.hidden_size
 
         dropout_rate = 0.3 if self.config.use_filter_pro else 0.1
 
@@ -30,14 +31,34 @@ class FilterModel(pl.LightningModule):
         self.tag_size = len(self.config.dataset.rels) + 1 if self.config.use_filter_opt1 == "concat_pro" else 1
 
         if self.config.use_filter_attn:
-            self.attn = SelfAttention(self.config.model.hidden_size)
+
+            self.attn_mode = self.config.use_filter_attn[0]
+            self.attn_opt = self.config.use_filter_attn[1:]
+
+            self.self_attn = SelfAttention(embed_dim=hidden_size)
+            self.downscale = nn.Linear(hidden_size * 2, hidden_size, bias=False)
+            self.upscale = nn.Linear(hidden_size, hidden_size * 2, bias=False)
+            self.word_embeddings = theta.plm_model.get_input_embeddings()
+            self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
+            self.layer_norm = nn.LayerNorm(hidden_size)
+
+        else:
+            self.attn_mode = None
+            self.attn_opt = None
+
+        self.rel_ids = theta.rel_ids
 
         remove_bias = self.config.use_filter_opt2 == "rm_bias"
         self.sub_proj = nn.Linear(self.config.model.hidden_size, attention_out_dim, bias=(not remove_bias))
         self.obj_proj = nn.Linear(self.config.model.hidden_size, attention_out_dim, bias=(not remove_bias))
 
+        if self.attn_opt == '2':
+            classifier_input_dim = attention_out_dim
+        else:
+            classifier_input_dim = attention_out_dim * 2
+
         self.filter_entity_pair_net = MultiNonLinearClassifier(
-            attention_out_dim * 2,
+            classifier_input_dim,
             dropout_rate=dropout_rate,
             hidden_dim=256 if self.config.use_filter_pro else None,
             tag_size=self.tag_size)
@@ -115,14 +136,31 @@ class FilterModel(pl.LightningModule):
             else:
                 raise NotImplementedError("use_rel_opt2: {}".format(self.config.use_rel_opt2))
 
-            if self.config.use_filter_attn:
-                ent_hs = self.attn(ent_hs)
+            if self.attn_opt == '1':
+                tag_embeddings = self.word_embeddings(torch.tensor(self.rel_ids, device=hidden_state.device))
+                tag_embeddings = tag_embeddings.unsqueeze(0) # [1, 1, ent_num, hidden_size]
+
+                ent_hs = self.self_attn(ent_hs)
+                attn_out = self.cross_attn(ent_hs.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
+                ent_hs = self.layer_norm(ent_hs + attn_out).squeeze(0)
 
             # ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
             ent_num, hidden_size = ent_hs.shape
 
             ent_hs_x = self.sub_proj(ent_hs)
             ent_hs_y = self.obj_proj(ent_hs)
+
+            if self.attn_opt == '3':
+                tag_embeddings = self.word_embeddings(torch.tensor(self.rel_ids, device=hidden_state.device))
+                tag_embeddings = tag_embeddings.unsqueeze(0) # [1, 1, ent_num, hidden_size]
+
+                ent_hs_x = self.self_attn(ent_hs_x)
+                attn_out = self.cross_attn(ent_hs_x.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
+                ent_hs_x = self.layer_norm(ent_hs_x + attn_out).squeeze(0)
+
+                ent_hs_y = self.self_attn(ent_hs_y)
+                attn_out = self.cross_attn(ent_hs_y.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
+                ent_hs_y = self.layer_norm(ent_hs_y + attn_out).squeeze(0)
 
             if self.config.use_filter_pro:
                 ent_hs_x = self.dropout(ent_hs_x)
@@ -135,6 +173,18 @@ class FilterModel(pl.LightningModule):
                 ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
                 ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
                 ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)    # (ent_num, ent_num, hidden_size * 2)
+
+                if self.attn_opt == '2':
+                    tag_embeddings = self.word_embeddings(torch.tensor(self.rel_ids, device=hidden_state.device))
+                    tag_embeddings = tag_embeddings.unsqueeze(0) # [1, 1, ent_num, hidden_size]
+
+                    ent_hs_pair = self.downscale(ent_hs_pair)
+                    ent_hs_pair = self.self_attn(ent_hs_pair)
+                    ent_hs_pair = ent_hs_pair.view(1, -1, hidden_size)
+                    attn_out = self.cross_attn(ent_hs_pair, tag_embeddings, tag_embeddings)[0]
+                    ent_hs_pair = self.layer_norm(ent_hs_pair + attn_out)
+                    ent_hs_pair = ent_hs_pair.view(ent_num, ent_num, hidden_size)
+
                 ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
 
             else:

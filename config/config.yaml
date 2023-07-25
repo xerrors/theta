@@ -53,6 +53,7 @@ ner_rate: 1
 rel_rate: 1
 filter_rate: 0.01
 pre_rel_rate: 1
+semantic_rate: 1
 
 # Filter
 use_rel_opt1: "obj"

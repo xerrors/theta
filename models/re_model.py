@@ -31,14 +31,20 @@ class REModel(pl.LightningModule):
             self.classifier = nn.Linear(hidden_size, len(self.rel_ids))
 
         elif config.use_rel == 'mlp':
-            # if config.use_rel_tag_cross_attn:
-            #     self.word_embeddings = theta.plm_model.get_input_embeddings()
-            #     self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
-            #     self.layer_norm = nn.LayerNorm(hidden_size)
-            self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
+            if config.use_rel_tag_cross_attn:
+                self.word_embeddings = theta.get_rel_tag_embeddings()
+                self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
+                self.layer_norm = nn.LayerNorm(hidden_size)
+                self.classifier = MultiNonLinearClassifier(hidden_size, len(self.rel_ids))
+
+            else:
+                self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
 
         else:
             raise NotImplementedError(f"config.use_rel = {config.use_rel} is not implemented")
+
+
+        self.downscale = nn.Linear(hidden_size * 3, hidden_size, bias=False)
 
         self.grt_count = 0
         self.hit_count = 0
@@ -218,30 +224,17 @@ class REModel(pl.LightningModule):
 
                 if len(ids) + 5 <= max_len and score > cur_threshold:  # 当设置 filter_rate 为 0 时，仅包含正确的实体对
                     marker_mask += 1
-                    if self.config.use_bio_embed and self.config.use_normal_tag:
-                        ss_tid = theta.tag_ids[self.ent_type_num * 2]
-                        os_tid = theta.tag_ids[self.ent_type_num * 2 + 1]
-                        se_tid = theta.tag_ids[self.ent_type_num * 2 + 2]
-                        oe_tid = theta.tag_ids[self.ent_type_num * 2 + 3]
 
-                    else:
-                        ss_tid = theta.tag_ids[sub_t]
-                        os_tid = theta.tag_ids[obj_t]
-                        se_tid = theta.tag_ids[sub_t + self.ent_type_num]
-                        oe_tid = theta.tag_ids[obj_t + self.ent_type_num]
+                    ss_tid = theta.tag_ids[sub_t]
+                    os_tid = theta.tag_ids[obj_t]
+                    se_tid = theta.tag_ids[sub_t + self.ent_type_num]
+                    oe_tid = theta.tag_ids[obj_t + self.ent_type_num]
 
-                    if self.config.use_bio_embed and self.config.use_o_appfix:
-                        mask_bio_id = theta.ent_ids[0]
-                        ss_bio_id = theta.ent_ids[0]
-                        os_bio_id = theta.ent_ids[0]
-                        se_bio_id = theta.ent_ids[0]
-                        oe_bio_id = theta.ent_ids[0]
-                    else:
-                        mask_bio_id = theta.ent_ids[0]
-                        ss_bio_id = theta.ent_ids[sub_t + 1]
-                        os_bio_id = theta.ent_ids[obj_t + 1]
-                        se_bio_id = theta.ent_ids[sub_t + self.ent_type_num + 1]
-                        oe_bio_id = theta.ent_ids[obj_t + self.ent_type_num + 1]
+                    mask_bio_id = theta.ent_ids[0]
+                    ss_bio_id = theta.ent_ids[sub_t + 1]
+                    os_bio_id = theta.ent_ids[obj_t + 1]
+                    se_bio_id = theta.ent_ids[sub_t + self.ent_type_num + 1]
+                    oe_bio_id = theta.ent_ids[obj_t + self.ent_type_num + 1]
 
                     ss_pid = sub_s - sent_s
                     os_pid = obj_s - sent_s
@@ -360,14 +353,6 @@ class REModel(pl.LightningModule):
             mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
 
-            # if self.config.use_rel_tag_cross_attn:
-            #     tag_embeddings = self.word_embeddings(torch.tensor(theta.rel_ids, device=device))
-            #     tag_embeddings = tag_embeddings.unsqueeze(0) # [1, 1, ent_num, hidden_size]
-
-            #     attn_out = self.cross_attn(rel_hidden_states.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
-            #     rel_hidden_states = self.layer_norm(rel_hidden_states + attn_out).squeeze(0)
-
-
             if self.config.use_rel_opt1 is str and self.config.use_rel_opt1.endswith("+"):
                 sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1] + rel_stage_hs[mask_pos[0], mask_pos[1]+3]
                 obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2] + rel_stage_hs[mask_pos[0], mask_pos[1]+4]
@@ -402,12 +387,18 @@ class REModel(pl.LightningModule):
             #     obj_hs += obj_tag_hs
 
             else:
-                raise NotImplementedError(f"rel_opt3: {rel_feature_config} not implemented")
+                raise NotImplementedError(f"rel_opt3: {self.config.use_rel_opt3} not implemented")
 
             if self.config.use_rel == 'mlp':
                 rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
             else:
                 rel_hidden_states += sub_hs - obj_hs
+
+            if self.config.use_rel_tag_cross_attn:
+                tag_embeddings = theta.get_rel_tag_embeddings(with_na=True, device=device).unsqueeze(0) # [1, 1, ent_num, hidden_size]
+                rel_hidden_states = self.downscale(rel_hidden_states)
+                attn_out = self.cross_attn(rel_hidden_states.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
+                rel_hidden_states = self.layer_norm(rel_hidden_states + attn_out).squeeze(0)
 
         if mode != 'predict':
             triple_labels = self.get_triples_label(triples, device, ent_groups, mode=mode, epoch=theta.current_epoch)
@@ -416,7 +407,27 @@ class REModel(pl.LightningModule):
         else:
             triple_labels = None
 
-        return ent_groups, rel_hidden_states, triple_labels, filter_loss
+
+        semantic_loss = torch.tensor(0.0).to(hidden_state.device)
+        if self.config.use_semantic_loss and len(ent_groups) != 0:
+            if self.config.model.hidden_size != rel_hidden_states.shape[-1]:
+                rel_hidden_states = self.downscale(rel_hidden_states)
+                assert self.config.model.hidden_size == rel_hidden_states.shape[-1]
+
+            if self.config.use_semantic_loss == "cos":
+                rel_embeddings = theta.plm_model.get_input_embeddings().weight[triple_labels + theta.rel_ids[0]]
+                semantic_loss = nn.CosineEmbeddingLoss(reduction='mean')
+                semantic_loss = semantic_loss(rel_hidden_states, rel_embeddings, torch.ones(len(ent_groups), device=device))
+            elif self.config.use_semantic_loss == "ce":
+                rel_embeddings = theta.get_rel_tag_embeddings(with_na=True, device=device).unsqueeze(0).repeat(len(rel_hidden_states), 1, 1)
+                semantic_logits = torch.einsum("bd,bed->be", rel_hidden_states, rel_embeddings)
+                semantic_loss = nn.CrossEntropyLoss(reduction='mean')(semantic_logits, triple_labels)
+            else:
+                raise NotImplementedError(f"semantic loss {self.config.use_semantic_loss} not implemented")
+
+
+
+        return ent_groups, rel_hidden_states, triple_labels, filter_loss, semantic_loss
 
     def forward(self, theta, batch, hidden_state, entities=None, return_loss=False, mode="train", with_score=False):
 
@@ -446,11 +457,12 @@ class REModel(pl.LightningModule):
 
         self.pre_mode = mode
 
-        ent_groups, hidden_output, triple_labels, filter_loss = output
+        ent_groups, hidden_output, triple_labels, filter_loss = output[:4]
+        semantic_loss = output[4] if len(output) > 4 else None
 
         if len(hidden_output) == 0:
             rel_loss = torch.tensor(0.0).to(hidden_state.device)
-            return ([],) if not return_loss else ([], rel_loss, filter_loss)
+            return ([],) if not return_loss else ([], rel_loss, filter_loss, semantic_loss)
 
         if theta.graph is not None and mode != 'predict':
             hidden_output = theta.graph.query_rels(hidden_output)
@@ -486,7 +498,7 @@ class REModel(pl.LightningModule):
 
             rel_loss = loss_fct(new_logits, new_labels)
 
-            return (triples_pred, rel_loss, filter_loss)
+            return (triples_pred, rel_loss, filter_loss, semantic_loss)
 
         if mode == "predict":
             return (triples_pred, ent_groups)

@@ -140,8 +140,10 @@ class NERModel(pl.LightningModule):
                         entity.append([i, i + 1, ent_type_id])
 
                 # 判断是否是 I 标签
-                elif logits[b, i] > self.num_ent_type and start:
+                elif start and self.config.use_crf and logits[b, i] == (entity[-1][0] + self.num_ent_type):
                     entity[-1][1] = i + 1  # 左闭右开
+                elif start and not self.config.use_crf and logits[b, i] > self.num_ent_type:
+                    entity[-1][1] = i + 1
                 else:
                     start = False
 
