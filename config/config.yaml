@@ -2,19 +2,21 @@ name: Joint Entity Relation Extraction
 
 # INFO: wandb
 wandb: True
-project: Theta
+project: Filter
 tag: default
 
 # INFO: Run
 num_worker: 12
-batch_size: 8 # can be overrided by model.yaml
+batch_size: 16 # can be overrided by model.yaml
+test_batch_size: 1
 lr: 0.00005
 task_lr: 0.0005
+ner_lr: 0.0005
 rel_lr: 0.00005
 # decoder_lr: 0.00003
 # Achieved by gradient accumulation
 # accumulate_grad_batches will be set as global_batch_size // batch_size
-global_batch_size: 32
+global_batch_size: 64
 warmup: 0.1
 
 # INFO: Trainer
@@ -25,7 +27,7 @@ precision: 16
 # reload_dataloaders_every_epoch: True
 
 # INFO: Model
-max_seq_len: 500
+max_seq_len: 300
 model_config: models/configs/bert.yaml # can not be modified in ext_config
 
 # INFO: Dataset
@@ -39,6 +41,9 @@ use_filter: True
 use_two_plm: False
 use_cache: True
 
+use_warmup_filter: 20
+use_warmup_rel: 10
+
 use_bio_embed: True
 # use_ent_pred_rel: "embed2" # for compatibility
 use_rel_opt3: "embed2"
@@ -51,9 +56,8 @@ use_graph_layers: 0
 # loss rate
 ner_rate: 1
 rel_rate: 1
-filter_rate: 0.01
-pre_rel_rate: 1
-semantic_rate: 1
+filter_rate: 1
+rel_ner_rate: 0.1
 
 # Filter
 use_rel_opt1: "obj"
@@ -64,6 +68,8 @@ use_thres_plus: True
 use_gold_ent_val: False
 use_gold_filter_val: False
 use_filter_label_enhance: False
+use_filter_loss_sum: True
+use_rel_ner: True
 
 # 待验证
 use_spert: False # defeat
@@ -71,7 +77,9 @@ use_spert: False # defeat
 # use_rel_cat: "none" # default none, pure
 # use_crf: False # 目前效果不太行
 # use_dynamic_rel_threshold: True
-ent_pair_threshold: 0.01
+use_thres_threshold: 0.0001
+ent_attn_layer_num: 1
+ent_mlp_layer_num: 2
 
 # lota
 use_ent_tag_cross_attn: True

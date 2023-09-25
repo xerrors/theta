@@ -27,18 +27,18 @@ class REModel(pl.LightningModule):
                 self.lmhead = getPretrainedLMHead(theta.plm_model, config.model)
 
         elif config.use_rel == 'linear':
-            # TODO Linear + LMHead
             self.classifier = nn.Linear(hidden_size, len(self.rel_ids))
 
         elif config.use_rel == 'mlp':
-            if config.use_rel_tag_cross_attn:
-                self.word_embeddings = theta.get_rel_tag_embeddings()
-                self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
-                self.layer_norm = nn.LayerNorm(hidden_size)
-                self.classifier = MultiNonLinearClassifier(hidden_size, len(self.rel_ids))
+            self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
 
-            else:
-                self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
+            # if config.use_rel_tag_cross_attn:
+            #     self.word_embeddings = theta.get_rel_tag_embeddings()
+            #     self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
+            #     self.layer_norm = nn.LayerNorm(hidden_size)
+            #     self.classifier = MultiNonLinearClassifier(hidden_size, len(self.rel_ids))
+            # else:
+            #     self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
 
         else:
             raise NotImplementedError(f"config.use_rel = {config.use_rel} is not implemented")
@@ -54,6 +54,13 @@ class REModel(pl.LightningModule):
         self.filter_score = {} # p, r, f1
         self.rel_type_num = len(self.config.dataset.rels)
         self.ent_type_num = len(self.config.dataset.ents)
+
+        self.remain = 0
+        self.total = 0
+        self.remain_val = 0
+        self.total_val = 0
+        self.remain_gold = 0
+        self.total_gold = 0
 
         self.loss_weight = torch.FloatTensor([config.get("na_rel_weight", 1)] + [1] * self.rel_type_num)
 
@@ -97,7 +104,7 @@ class REModel(pl.LightningModule):
 
         return triple_labels
 
-    def prepare(self, theta, hidden_state, batch, entities, mode="train"):
+    def prepare(self, theta, hidden_state, batch, entities, mode="train", return_loss=False):
         """Get hidden state for the 2nd stage: relation classification"""
 
         ent_ids = theta.ent_ids
@@ -108,8 +115,8 @@ class REModel(pl.LightningModule):
 
         bsz, seq_len = input_ids.shape
 
-        # is_train_thres = self.config.ent_pair_threshold and self.config.use_thres_train and mode == 'train'
-        # is_val_thres = self.config.ent_pair_threshold and self.config.use_thres_val and mode != 'train'
+        # is_train_thres = self.config.use_thres_threshold and self.config.use_thres_train and mode == 'train'
+        # is_val_thres = self.config.use_thres_threshold and self.config.use_thres_val and mode != 'train'
         # use_thres = is_train_thres or is_val_thres
 
         # 如果启用 use_thres_train，则训练阶段实际上是使用的是所有的有关系的实体对
@@ -118,10 +125,10 @@ class REModel(pl.LightningModule):
         cur_threshold = -1
         if self.config.use_filter and mode != 'train':
             if self.config.use_thres_val:
-                assert self.config.ent_pair_threshold >= 0, "ent_pair_threshold must be >= 0"
-                cur_threshold = self.config.ent_pair_threshold
+                assert self.config.use_thres_threshold >= 0, "use_thres_threshold must be >= 0"
+                cur_threshold = self.config.use_thres_threshold
             elif mode != "predict":
-                cur_threshold = 0.001  # default validation threshold
+                cur_threshold = 0.0001  # default validation threshold
 
         if mode != "predict":
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
@@ -130,7 +137,7 @@ class REModel(pl.LightningModule):
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode)
             labels = None
 
-        max_len= 1024
+        max_len= 512
         ent_groups = []
         bio_tags = []
         rel_input_ids = []
@@ -179,30 +186,31 @@ class REModel(pl.LightningModule):
                 pred_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
                 gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode, pred=logits if self.config.use_thres_plus else None)
 
-                count = len(gold_draft_ent_groups)
                 if self.config.use_thres_train and mode == "train":
-                    l = 2
                     ent_count = len(entity)
-                    r = self.filter_score.get("recall", 0)
+                    gold_count = len(gold_draft_ent_groups)
                     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.5])
-                    min_count = 5
+                    r = theta.filter.train_metrics.get("recall", 0)
 
-                    if self.config.use_filter_opt5 and self.config.use_filter_opt5.startswith("u"):
-                        l = int(self.config.use_filter_opt5[1:])
-                        r = theta.filter.train_metrics.get("recall", 0) # note recall is lower than the pred count
-                        pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.5])
-                    elif self.config.use_filter_opt5 and self.config.use_filter_opt5.startswith("x"):
-                        l = int(self.config.use_filter_opt5[1:])
-                        r = theta.filter.train_metrics.get("recall", 0)
-                        pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.8])
+                    # if self.config.use_filter_opt5 and self.config.use_filter_opt5.startswith("u"):
+                    #     l = int(self.config.use_filter_opt5[1:])
+                    #     r = theta.filter.train_metrics.get("recall", 0) # note recall is lower than the pred count
+                    #     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.5])
+                    # elif self.config.use_filter_opt5 and self.config.use_filter_opt5.startswith("x"):
+                    #     l = int(self.config.use_filter_opt5[1:])
+                    #     r = theta.filter.train_metrics.get("recall", 0)
+                    #     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.8])
 
                     # 2023-0510
-                    count = max(min_count, int(count - count * r + pred_count * l * r))
                     opt3 = self.config.use_filter_opt3
                     if opt3 == "0511":
-                        count = max(min_count, int(count * (1 - r) + (l + (1 - l) * r) * r * pred_count))
-                    elif opt3 == "0513":
-                        count = max(ent_count, int(count - count * r + pred_count * l * r))
+                        count = max(ent_count, int(gold_count - gold_count * r + pred_count * r))
+                    elif opt3 == "0903":
+                        count = max(int(np.ceil(ent_count * (1 - r))), int(gold_count - gold_count * r + pred_count * r * 2))
+                    # elif opt3 == "0904":
+                    #     count = max(0, int(gold_count - gold_count * r + pred_count * r))
+                    else:
+                        count = max(5, int(gold_count - gold_count * r + pred_count * r))
 
                 if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
                     draft_ent_groups = gold_draft_ent_groups[:count]
@@ -215,6 +223,13 @@ class REModel(pl.LightningModule):
 
             else:
                 draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
+
+            # if mode == "train" and return_loss:
+            #     self.remain += len(draft_ent_groups)
+            #     self.total += len(gold_draft_ent_groups)
+            # elif mode == "dev" or mode == "test":
+            #     self.remain_val += len(draft_ent_groups)
+            #     self.total_val += len(gold_draft_ent_groups)
 
             marker_mask = 1
             for ent_pair in draft_ent_groups:
@@ -247,6 +262,10 @@ class REModel(pl.LightningModule):
                         mask_pos = ss_pid
                     elif self.config.use_rel_opt1.startswith("mid"):
                         mask_pos = int((ss_pid + os_pid) / 2)
+                    # elif self.config.use_rel_opt1 == "start":
+                    #     mask_pos = 0
+                    # elif self.config.use_rel_opt1 == "start_pos":
+                    #     mask_pos = sent_s
                     else:
                         raise Exception(f"use_rel_opt1 参数错误: {self.config.use_rel_opt1}")
 
@@ -271,6 +290,12 @@ class REModel(pl.LightningModule):
                         ent_hidden_states.append(torch.stack([
                             hidden_state[b, sub_s:sub_e].mean(dim=0),
                             hidden_state[b, obj_s:obj_e].mean(dim=0)]))
+                    # elif self.config.use_rel_opt2 == "mean+":
+                    #     ent_hs = torch.stack([
+                    #         hidden_state[b, sub_s:sub_e].mean(dim=0),
+                    #         hidden_state[b, obj_s:obj_e].mean(dim=0)])
+                    #     ent_bio_embeds = theta.plm_model.bert.embeddings.word_embeddings(torch.tensor([ss_bio_id, os_bio_id], device=device))
+                    #     ent_hidden_states.append(ent_hs / 2 + ent_bio_embeds / 2)
                     elif self.config.use_rel_opt2 == "head" or not self.config.use_rel_opt2: # default head
                         ent_hidden_states.append(torch.stack([
                             hidden_state[b, sub_s],
@@ -286,8 +311,20 @@ class REModel(pl.LightningModule):
             rel_attention_mask.append(torch.tensor(masks)) # 不要放到 cuda 上
             bio_tags.append(torch.tensor(bio_ids))
 
+            if mode == "train":
+                self.remain += marker_mask - 1
+                self.total += len(pred_draft_ent_groups)
+            elif mode == "dev" or mode == "test":
+                if return_loss:
+                    self.remain_gold += marker_mask - 1
+                    self.total_gold += len(pred_draft_ent_groups)
+                else:
+                    self.remain_val += marker_mask
+                    self.total_val += len(pred_draft_ent_groups)
+
         rel_input_ids = nn.utils.rnn.pad_sequence(rel_input_ids, batch_first=True, padding_value=pad_token)
         rel_positional_ids = nn.utils.rnn.pad_sequence(rel_positional_ids, batch_first=True, padding_value=0)
+        rel_attention_mask_pad = nn.utils.rnn.pad_sequence(rel_attention_mask, batch_first=True, padding_value=0)
         # rel_positional_id2 = nn.utils.rnn.pad_sequence(rel_positional_id2, batch_first=True, padding_value=0)
         bio_tags = nn.utils.rnn.pad_sequence(bio_tags, batch_first=True, padding_value=theta.ent_ids[0])
 
@@ -323,25 +360,30 @@ class REModel(pl.LightningModule):
         assert rel_input_ids.shape == rel_positional_ids.shape
 
         rel_hidden_states = []
+        sent_ner_loss = torch.tensor(0.0).to(hidden_state.device)
 
         if len(ent_groups) != 0:
             # 1. ent hidden state
             ent_hidden_states = torch.stack(ent_hidden_states) # [ent_num, 2, hidden_size]
 
-            if self.config.use_bio_embed:
-                rel_inputs_embeds = self.bert_embeddings_with_bio_tag_embedding(
-                    theta.plm_model.bert.embeddings.word_embeddings,
-                    bio_tags=bio_tags,
-                    input_ids=rel_input_ids
-                )
-            else:
-                rel_inputs_embeds = None
-                assert rel_input_ids is not None
+            rel_inputs_embeds = self.bert_embeddings_with_bio_tag_embedding(
+                theta.plm_model.bert.embeddings.word_embeddings,
+                bio_tags=bio_tags,
+                input_ids=rel_input_ids)
+
+            # if self.config.use_bio_embed:
+            #     rel_inputs_embeds = self.bert_embeddings_with_bio_tag_embedding(
+            #         theta.plm_model.bert.embeddings.word_embeddings,
+            #         bio_tags=bio_tags,
+            #         input_ids=rel_input_ids)
+            # else:
+            #     rel_inputs_embeds = None
+            #     assert rel_input_ids is not None
 
             # 2. 重新计算 hidden state
             plm_model = theta.plm_model_for_re if self.config.use_two_plm else theta.plm_model
             outputs = plm_model(
-                        input_ids=rel_input_ids if not self.config.use_bio_embed else None, # torch.Size([8, 607])
+                        input_ids=None, # rel_input_ids if not self.config.use_bio_embed else None, # torch.Size([8, 607])
                         inputs_embeds=rel_inputs_embeds,
                         attention_mask=rel_attention_mask, # torch.Size([8, 607, 607])
                         position_ids=rel_positional_ids, # torch.Size([8, 607]),
@@ -353,6 +395,11 @@ class REModel(pl.LightningModule):
             mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
 
+
+            if self.config.use_rel_ner:
+                sent_mask = torch.where(rel_attention_mask_pad == 1, 1, 0).to(device)
+                logits, sent_ner_loss = theta.ner_model(rel_stage_hs, labels=(bio_tags - theta.ent_ids[0]), mask=sent_mask)
+
             if self.config.use_rel_opt1 is str and self.config.use_rel_opt1.endswith("+"):
                 sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1] + rel_stage_hs[mask_pos[0], mask_pos[1]+3]
                 obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2] + rel_stage_hs[mask_pos[0], mask_pos[1]+4]
@@ -360,23 +407,29 @@ class REModel(pl.LightningModule):
                 sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
                 obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
 
-            if self.config.use_rel_opt3 == "tag":
-                sub_hs = sub_tag_hs
-                obj_hs = obj_tag_hs
+            # default embed2
+            sub_hs = ent_hidden_states[:, 0, :] + sub_tag_hs
+            obj_hs = ent_hidden_states[:, 1, :] + obj_tag_hs
 
-            elif self.config.use_rel_opt3 == "embed":
-                sub_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
-                obj_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
-                sub_hs = rel_stage_hs[mask_pos[0], sub_pos_ids]
-                obj_hs = rel_stage_hs[mask_pos[0], obj_pos_ids]
-                sub_hs += sub_tag_hs
-                obj_hs += obj_tag_hs
+            rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
 
-            elif self.config.use_rel_opt3 == "embed2":
-                sub_hs = ent_hidden_states[:, 0, :] + sub_tag_hs
-                obj_hs = ent_hidden_states[:, 1, :] + obj_tag_hs
+            # if self.config.use_rel_opt3 == "tag":
+            #     sub_hs = sub_tag_hs
+            #     obj_hs = obj_tag_hs
 
-            # elif rel_feature_config == "embed3":
+            # elif self.config.use_rel_opt3 == "embed":
+            #     sub_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
+            #     obj_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
+            #     sub_hs = rel_stage_hs[mask_pos[0], sub_pos_ids]
+            #     obj_hs = rel_stage_hs[mask_pos[0], obj_pos_ids]
+            #     sub_hs += sub_tag_hs
+            #     obj_hs += obj_tag_hs
+
+            # elif self.config.use_rel_opt3 == "embed2":
+            #     sub_hs = ent_hidden_states[:, 0, :] + sub_tag_hs
+            #     obj_hs = ent_hidden_states[:, 1, :] + obj_tag_hs
+
+            # elif self.config.use_rel_opt3 == "embed3":
             #     ss_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
             #     os_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
             #     se_pos_ids = rel_positional_id2[mask_pos[0], mask_pos[1]+1]
@@ -386,19 +439,19 @@ class REModel(pl.LightningModule):
             #     sub_hs += sub_tag_hs
             #     obj_hs += obj_tag_hs
 
-            else:
-                raise NotImplementedError(f"rel_opt3: {self.config.use_rel_opt3} not implemented")
+            # else:
+            #     raise NotImplementedError(f"rel_opt3: {self.config.use_rel_opt3} not implemented")
 
-            if self.config.use_rel == 'mlp':
-                rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
-            else:
-                rel_hidden_states += sub_hs - obj_hs
+            # if self.config.use_rel == 'mlp':
+            #     rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
+            # else:
+            #     rel_hidden_states += sub_hs - obj_hs
 
-            if self.config.use_rel_tag_cross_attn:
-                tag_embeddings = theta.get_rel_tag_embeddings(with_na=True, device=device).unsqueeze(0) # [1, 1, ent_num, hidden_size]
-                rel_hidden_states = self.downscale(rel_hidden_states)
-                attn_out = self.cross_attn(rel_hidden_states.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
-                rel_hidden_states = self.layer_norm(rel_hidden_states + attn_out).squeeze(0)
+            # if self.config.use_rel_tag_cross_attn:
+            #     tag_embeddings = theta.get_rel_tag_embeddings(with_na=True, device=device).unsqueeze(0) # [1, 1, ent_num, hidden_size]
+            #     rel_hidden_states = self.downscale(rel_hidden_states)
+            #     attn_out = self.cross_attn(rel_hidden_states.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
+            #     rel_hidden_states = self.layer_norm(rel_hidden_states + attn_out).squeeze(0)
 
         if mode != 'predict':
             triple_labels = self.get_triples_label(triples, device, ent_groups, mode=mode, epoch=theta.current_epoch)
@@ -408,26 +461,26 @@ class REModel(pl.LightningModule):
             triple_labels = None
 
 
-        semantic_loss = torch.tensor(0.0).to(hidden_state.device)
-        if self.config.use_semantic_loss and len(ent_groups) != 0:
-            if self.config.model.hidden_size != rel_hidden_states.shape[-1]:
-                rel_hidden_states = self.downscale(rel_hidden_states)
-                assert self.config.model.hidden_size == rel_hidden_states.shape[-1]
+        # semantic_loss = torch.tensor(0.0).to(hidden_state.device)
+        # if self.config.use_semantic_loss and len(ent_groups) != 0:
+        #     if self.config.model.hidden_size != rel_hidden_states.shape[-1]:
+        #         rel_hidden_states = self.downscale(rel_hidden_states)
+        #         assert self.config.model.hidden_size == rel_hidden_states.shape[-1]
 
-            if self.config.use_semantic_loss == "cos":
-                rel_embeddings = theta.plm_model.get_input_embeddings().weight[triple_labels + theta.rel_ids[0]]
-                semantic_loss = nn.CosineEmbeddingLoss(reduction='mean')
-                semantic_loss = semantic_loss(rel_hidden_states, rel_embeddings, torch.ones(len(ent_groups), device=device))
-            elif self.config.use_semantic_loss == "ce":
-                rel_embeddings = theta.get_rel_tag_embeddings(with_na=True, device=device).unsqueeze(0).repeat(len(rel_hidden_states), 1, 1)
-                semantic_logits = torch.einsum("bd,bed->be", rel_hidden_states, rel_embeddings)
-                semantic_loss = nn.CrossEntropyLoss(reduction='mean')(semantic_logits, triple_labels)
-            else:
-                raise NotImplementedError(f"semantic loss {self.config.use_semantic_loss} not implemented")
+        #     if self.config.use_semantic_loss == "cos":
+        #         rel_embeddings = theta.plm_model.get_input_embeddings().weight[triple_labels + theta.rel_ids[0]]
+        #         semantic_loss = nn.CosineEmbeddingLoss(reduction='mean')
+        #         semantic_loss = semantic_loss(rel_hidden_states, rel_embeddings, torch.ones(len(ent_groups), device=device))
+        #     elif self.config.use_semantic_loss == "ce":
+        #         rel_embeddings = theta.get_rel_tag_embeddings(with_na=True, device=device).unsqueeze(0).repeat(len(rel_hidden_states), 1, 1)
+        #         semantic_logits = torch.einsum("bd,bed->be", rel_hidden_states, rel_embeddings)
+        #         semantic_loss = nn.CrossEntropyLoss(reduction='mean')(semantic_logits, triple_labels)
+        #     else:
+        #         raise NotImplementedError(f"semantic loss {self.config.use_semantic_loss} not implemented")
 
 
 
-        return ent_groups, rel_hidden_states, triple_labels, filter_loss, semantic_loss
+        return ent_groups, rel_hidden_states, triple_labels, filter_loss, sent_ner_loss
 
     def forward(self, theta, batch, hidden_state, entities=None, return_loss=False, mode="train", with_score=False):
 
@@ -436,7 +489,8 @@ class REModel(pl.LightningModule):
                     batch=batch,
                     hidden_state=hidden_state,
                     entities=entities,
-                    mode=mode)
+                    mode=mode,
+                    return_loss=return_loss)
 
 
         '''
@@ -458,14 +512,14 @@ class REModel(pl.LightningModule):
         self.pre_mode = mode
 
         ent_groups, hidden_output, triple_labels, filter_loss = output[:4]
-        semantic_loss = output[4] if len(output) > 4 else None
+        sent_ner_loss = output[4] if len(output) > 4 else None
 
         if len(hidden_output) == 0:
             rel_loss = torch.tensor(0.0).to(hidden_state.device)
-            return ([],) if not return_loss else ([], rel_loss, filter_loss, semantic_loss)
+            return ([],) if not return_loss else ([], rel_loss, filter_loss, sent_ner_loss)
 
-        if theta.graph is not None and mode != 'predict':
-            hidden_output = theta.graph.query_rels(hidden_output)
+        # if theta.graph is not None and mode != 'predict':
+        #     hidden_output = theta.graph.query_rels(hidden_output)
 
         if self.config.use_rel == 'lmhead':
             assert self.lmhead is not None
@@ -483,9 +537,9 @@ class REModel(pl.LightningModule):
             else:
                 triples_pred.append(ent_groups[i] + [rel])
 
-            if relation_logits[i] > 0 and theta.graph:
-                rel_embeddings = hidden_output[i].detach().clone()
-                theta.graph.add_edge(sub=ent_groups[i][0], obj=ent_groups[i][1], rel_type=rel-1, embedding=rel_embeddings)
+            # if relation_logits[i] > 0 and theta.graph:
+            #     rel_embeddings = hidden_output[i].detach().clone()
+            #     theta.graph.add_edge(sub=ent_groups[i][0], obj=ent_groups[i][1], rel_type=rel-1, embedding=rel_embeddings)
 
         # triples_pred = [ent_groups[i] + [rel] for i in range(len(ent_groups))]
 
@@ -498,7 +552,7 @@ class REModel(pl.LightningModule):
 
             rel_loss = loss_fct(new_logits, new_labels)
 
-            return (triples_pred, rel_loss, filter_loss, semantic_loss)
+            return (triples_pred, rel_loss, filter_loss, sent_ner_loss)
 
         if mode == "predict":
             return (triples_pred, ent_groups)
@@ -509,12 +563,25 @@ class REModel(pl.LightningModule):
         self.filter_score["precision"] = self.hit_count / (self.rel_count + 1e-8)
         self.filter_score["recall"] = self.hit_count / (self.grt_count + 1e-8)
         self.filter_score["f1"] = 2 * self.hit_count / (self.grt_count + self.rel_count + 1e-8)
-        self.log("info/pair_precision", self.filter_score["precision"])
-        self.log("info/pair_recall", self.filter_score["recall"])
-        self.log("info/pair_f1", self.filter_score["f1"])
+        self.log("pair/f1", self.filter_score["f1"])
+        self.log("pair/precision", self.filter_score["precision"])
+        self.log("pair/recall", self.filter_score["recall"])
         self.hit_count = 0
         self.grt_count = 0
         self.rel_count = 0
+
+    def log_filter_rate(self):
+        self.log("filter/rate", self.remain / (self.total + 1e-8))
+        self.remain = 0
+        self.total = 0
+
+    def log_filter_rate_val(self):
+        self.log("filter/rate_val", self.remain_val / (self.total_val + 1e-8))
+        self.log("filter/rate_gold_ent", self.remain_gold / (self.total_gold + 1e-8))
+        self.remain_val = 0
+        self.total_val = 0
+        self.remain_gold = 0
+        self.total_gold = 0
 
     # def prepare_one_sent(self, theta, batch, hidden_state, entities, mode):
 

@@ -74,7 +74,7 @@ class DataModule(pl.LightningDataModule):
             )
 
         return dataset
-    
+
     def get_dataset_ace_for_predict(self):
 
         dataset = Dataset(self.config.dataset["test"])
@@ -88,7 +88,7 @@ class DataModule(pl.LightningDataModule):
                     "doc": doc_text,
                     "sent": " ".join(sent.text),
                 }
-                
+
                 entities = []
                 for ent in sent.ner:
                     entities.append({
@@ -114,11 +114,10 @@ class DataModule(pl.LightningDataModule):
         return items
 
     def train_dataloader(self):
-        shuffle = False if self.config.use_graph_layers > 0 else True
-        return DataLoader(self.data_train, shuffle=shuffle, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
+        return DataLoader(self.data_train, shuffle=True, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
 
     def val_dataloader(self):
         return DataLoader(self.data_val, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
 
     def test_dataloader(self):
-        return DataLoader(self.data_test, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
+        return DataLoader(self.data_test, shuffle=False, batch_size=self.config.test_batch_size, num_workers=self.config.num_worker, pin_memory=False) # type: ignore

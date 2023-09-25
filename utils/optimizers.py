@@ -1,4 +1,5 @@
 from torch.optim import AdamW
+from lion_pytorch import Lion
 from transformers.optimization import get_cosine_schedule_with_warmup
 
 import utils
@@ -42,7 +43,13 @@ def get_optimizer(theta, config):
 
     optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=added_list))
 
-    optimizer = AdamW(optimizer_group_parameters, lr=config.lr, eps=1e-8)
+    if config.optimizer == "Lion":
+        for group in optimizer_group_parameters:
+            group["lr"] = group["lr"] * 0.1
+
+        optimizer = Lion(optimizer_group_parameters, lr=config.lr * 0.1)
+    else:
+        optimizer = AdamW(optimizer_group_parameters, lr=config.lr, eps=1e-8)
 
     if config.warmup:
         num_training_steps = calc_num_training_steps(theta)

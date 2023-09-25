@@ -34,7 +34,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     context_window = config.get("context_window", 0)
     max_span_length = config.get("max_span_length", 10)
 
-    if context_window and context_window > max_seq_len:
+    if context_window and context_window > max_seq_len - 2:
         print(f'context_window{context_window} > max_seq_len{max_seq_len}, context window will be set as `max_seq_len - 2`')
         context_window = max_seq_len - 2
 
@@ -134,8 +134,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             sent_end += sent_start  # sent_end 包含 sep token 或者 context window 的 token
 
             span_mask = np.zeros((max_seq_len, max_seq_len), dtype=np.int16)
-            for i in range(sent_start, sent_end):
-                span_mask[i, i:min(sent_end, i+max_span_length)] = 1
+            for s_i in range(sent_start, sent_end):
+                span_mask[s_i, s_i:min(sent_end, s_i+max_span_length)] = 1
 
             # 实体的位置索引映射
             start2idx = [i + sent_start for i in start2idx]

@@ -42,7 +42,8 @@ class Config(SimpleConfig):
         ckpt = args.test_from_ckpt or kwargs.get("test_from_ckpt")
         if ckpt:
             self.load_from_ckpt(ckpt) # type: ignore
-            self.wandb = False
+            # self.wandb = False
+            self.offline = True
 
             self.ext_config = kwargs
             self.args = Namespace(**self.formatted_args) # type: ignore
@@ -110,8 +111,8 @@ class Config(SimpleConfig):
         if not self.with_ext_config and not self.no_borther_confirm:
             self.tag = utils.confirm_value("tag", self.tag)
 
-            if self.debug and self.wandb:
-                self.wandb = utils.confirm_bool("wandb", self.wandb)
+            if self.debug and self.wandb and not self.offline:
+                self.offline = utils.confirm_bool("offline with wandb", self.offline)
 
         # 创建此次实验的基本信息，运行时间，输出路径
         self.start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
@@ -124,7 +125,8 @@ class Config(SimpleConfig):
 
         # 快速验证模式
         if self.fast_dev_run:
-            self.wandb = False
+            # self.wandb = False
+            self.offline = True
             print(utils.blue_background(">>> FAST DEV RUN MODE <<<"))
 
         self.test_result = os.path.join(self.output_dir, f"test-result.json")
