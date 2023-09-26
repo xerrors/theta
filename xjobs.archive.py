@@ -83,7 +83,7 @@ index = {
     "ner_lr": "ELR@",
     "rel_lr": "RLR@",
     "filter_lr": "FLR@",
-    "use_rel_sum_loss": "RSum",
+    "use_rel_loss_sum": "RSum",
     "use_filter_sum_loss": "FSum",
     "batch_size": "BS",
     # test

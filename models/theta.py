@@ -398,8 +398,8 @@ class Theta(pl.LightningModule):
         rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples')
 
         self.best_f1 = max(f1, self.best_f1)
-        self.log_dict_values({'val/precision': p, 'val/recall': r})
-        self.log_dict_values({'val_f1': f1, 'best_f1': self.best_f1}, on_epoch=True, prog_bar=True)
+        self.log_dict_values({'val_f1': f1, 'val/precision': p, 'val/recall': r})
+        self.log_dict_values({'best_f1': self.best_f1}, on_epoch=True, prog_bar=True)
         self.log_dict_values({'val/ner_f1': ner_f1, 'val/ner_p': ner_p, 'val/ner_r': ner_r})
         self.log_dict_values({'val/rel_f1': rel_f1, 'val/rel_p': rel_p, 'val/rel_r': rel_r})
         self.filter.log_filter_val_metrics()
