@@ -68,7 +68,7 @@ use_thres_plus: True
 use_gold_ent_val: False
 use_gold_filter_val: False
 use_filter_label_enhance: False
-use_filter_loss_sum: True
+use_filter_loss_sum: 100
 use_rel_ner: True
 
 # 待验证

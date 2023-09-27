@@ -210,8 +210,10 @@ class FilterModel(pl.LightningModule):
             labels = self.get_filter_label(entities, triples, logits, map_dict)
 
             if self.config.use_filter_loss_sum:
+                scale_rate = int(self.config.use_filter_loss_sum)
+                assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device)) # , label_smoothing=0.1
-                loss = loss_fct(logits, labels.long()) / 100
+                loss = loss_fct(logits, labels.long()) / scale_rate
             else:
                 loss_fct = nn.CrossEntropyLoss(reduction='mean', weight=self.loss_weight.to(logits.device))
                 loss = loss_fct(logits, labels.long())

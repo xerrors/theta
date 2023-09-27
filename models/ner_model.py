@@ -121,8 +121,8 @@ class NERModel(pl.LightningModule):
         # if self.config.use_ent_tag_cross_attn == "local":
         #     from models.components import LocalAttention
         #     self.self_attn = LocalAttention(embed_size=hidden_size, window_size=self.config.ent_attn_range)
-
-        self.attn_layer = EntAttention(config, theta.plm_model.get_input_embeddings(), self.ent_ids)
+        self.get_input_embeddings = theta.plm_model.get_input_embeddings
+        self.attn_layer = EntAttention(config, self.get_input_embeddings(), self.ent_ids)
 
         # self.self_attn = SelfAttention(embed_dim=hidden_size, range=self.config.ent_attn_range)
         # self.word_embeddings = theta.plm_model.get_input_embeddings()
@@ -132,40 +132,45 @@ class NERModel(pl.LightningModule):
         self.num_ent_type = len(self.config.dataset.ents)
         self.loss_weight = torch.FloatTensor([config.get("na_ner_weight", 1)] + [1] * self.num_ent_type * 2)
 
-    def forward(self, hidden_state, labels=None, graph=None, mask=None, return_hs=False):
+    def forward(self, hidden_states, labels=None, graph=None, mask=None, return_hs=False):
         # if self.config.use_ent_attn and not self.config.use_ent_tag_cross_attn:
-        #     hidden_state = self.self_attn(hidden_state)
+        #     hidden_states = self.self_attn(hidden_states)
 
         # elif self.config.use_ent_tag_cross_attn:
         #     # assert (self.word_embeddings.weight == self.plm.get_input_embeddings().weight).all()
         #     # assert (self.plm.get_input_embeddings().weight == self.plm.get_output_embeddings().weight).all()
-        #     tag_embeddings = self.word_embeddings(torch.tensor(self.ent_ids, device=hidden_state.device))
-        #     tag_embeddings = tag_embeddings.unsqueeze(0).repeat(hidden_state.shape[0], 1, 1)
+        #     tag_embeddings = self.word_embeddings(torch.tensor(self.ent_ids, device=hidden_states.device))
+        #     tag_embeddings = tag_embeddings.unsqueeze(0).repeat(hidden_states.shape[0], 1, 1)
 
-        #     hidden_state = self.self_attn(hidden_state)
-        #     attn_out = self.cross_attn(hidden_state, tag_embeddings, tag_embeddings)[0]
-        #     hidden_state = self.layer_norm(hidden_state + attn_out)
+        #     hidden_states = self.self_attn(hidden_states)
+        #     attn_out = self.cross_attn(hidden_states, tag_embeddings, tag_embeddings)[0]
+        #     hidden_states = self.layer_norm(hidden_states + attn_out)
+
+        if self.config.use_ent_bio_input:
+            embeddings = self.get_input_embeddings()
+            tag_embeddings = embeddings(torch.tensor(self.ent_ids, device=hidden_states.device)).mean(dim=0)
+            hidden_states += tag_embeddings.unsqueeze(0).repeat(hidden_states.shape[0], 1, 1)
 
         # if graph is not None:
-        #     hidden_state = graph.query_ents(hidden_state)
-        hidden_state = self.attn_layer(hidden_state)
+        #     hidden_states = graph.query_ents(hidden_states)
+        hidden_states = self.attn_layer(hidden_states)
 
-        # tag_embeddings = self.word_embeddings(torch.tensor(self.ent_ids, device=hidden_state.device))
-        # tag_embeddings = tag_embeddings.unsqueeze(0).repeat(hidden_state.shape[0], 1, 1)
+        # tag_embeddings = self.word_embeddings(torch.tensor(self.ent_ids, device=hidden_states.device))
+        # tag_embeddings = tag_embeddings.unsqueeze(0).repeat(hidden_states.shape[0], 1, 1)
 
-        # hidden_state = self.self_attn(hidden_state)
-        # attn_out = self.cross_attn(hidden_state, tag_embeddings, tag_embeddings)[0]
-        # hidden_state = self.layer_norm(hidden_state + attn_out)
+        # hidden_states = self.self_attn(hidden_states)
+        # attn_out = self.cross_attn(hidden_states, tag_embeddings, tag_embeddings)[0]
+        # hidden_states = self.layer_norm(hidden_states + attn_out)
 
         if mask is None:
-            mask = torch.ones(hidden_state.shape[:2], device=hidden_state.device)
+            mask = torch.ones(hidden_states.shape[:2], device=hidden_states.device)
 
         if self.config.use_ner == "lmhead":
             assert self.lmhead is not None
-            logits = self.lmhead(hidden_state)
+            logits = self.lmhead(hidden_states)
             logits = logits[..., self.ent_ids]
         else:
-            logits = self.classifier(hidden_state)
+            logits = self.classifier(hidden_states)
 
         loss = torch.tensor(0.0, device=logits.device)
         bsz = logits.shape[0]
@@ -191,7 +196,7 @@ class NERModel(pl.LightningModule):
             loss = loss_fct(new_logits, new_labels)
 
         if return_hs:
-            return logits, loss, hidden_state
+            return logits, loss, hidden_states
         else:
             return logits, loss
 

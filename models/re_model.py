@@ -30,7 +30,7 @@ class REModel(pl.LightningModule):
             self.classifier = nn.Linear(hidden_size, len(self.rel_ids))
 
         elif config.use_rel == 'mlp':
-            self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
+            self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids), layers_num=self.config.get("rel_mlp_layer_num", 1))
 
             # if config.use_rel_tag_cross_attn:
             #     self.word_embeddings = theta.get_rel_tag_embeddings()
@@ -189,7 +189,8 @@ class REModel(pl.LightningModule):
                 if self.config.use_thres_train and mode == "train":
                     ent_count = len(entity)
                     gold_count = len(gold_draft_ent_groups)
-                    pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.5])
+                    gamma = self.config.get("use_thres_gamma", 0.5)
+                    pred_count = len([1 for e in pred_draft_ent_groups if e[2] > gamma])
                     r = theta.filter.train_metrics.get("recall", 0)
 
                     # if self.config.use_filter_opt5 and self.config.use_filter_opt5.startswith("u"):
@@ -202,13 +203,13 @@ class REModel(pl.LightningModule):
                     #     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.8])
 
                     # 2023-0510
-                    opt3 = self.config.use_filter_opt3
-                    if opt3 == "0511":
+                    strategy = self.config.use_filter_strategy
+                    if strategy == "0511":
                         count = max(ent_count, int(gold_count - gold_count * r + pred_count * r))
-                    elif opt3 == "0903":
+                    elif strategy == "0903":
                         count = max(int(np.ceil(ent_count * (1 - r))), int(gold_count - gold_count * r + pred_count * r * 2))
-                    # elif opt3 == "0904":
-                    #     count = max(0, int(gold_count - gold_count * r + pred_count * r))
+                    elif strategy == "0927":
+                        count = max(0, int(gold_count - gold_count * r + pred_count * r))
                     else:
                         count = max(5, int(gold_count - gold_count * r + pred_count * r))
 
@@ -545,12 +546,17 @@ class REModel(pl.LightningModule):
 
         rel_loss = torch.tensor(0.0).to(logits.device)
         if triple_labels is not None and return_loss:
-            reduction = 'sum' if self.config.use_rel_sum_loss else 'mean'
-            loss_fct = nn.CrossEntropyLoss(reduction=reduction, weight=self.loss_weight.to(logits.device))
             new_logits = logits.view(-1, len(self.rel_ids))
             new_labels = triple_labels.view(-1)
 
-            rel_loss = loss_fct(new_logits, new_labels)
+            if self.config.use_rel_loss_sum:
+                scale_rate = int(self.config.use_rel_loss_sum)
+                assert scale_rate > 0, "use_rel_loss_sum 参数错误"
+                loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device))
+                rel_loss = loss_fct(new_logits, new_labels) / scale_rate
+            else:
+                loss_fct = nn.CrossEntropyLoss(reduction='mean', weight=self.loss_weight.to(logits.device))
+                rel_loss = loss_fct(new_logits, new_labels)
 
             return (triples_pred, rel_loss, filter_loss, sent_ner_loss)
 
