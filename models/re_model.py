@@ -553,7 +553,7 @@ class REModel(pl.LightningModule):
                 scale_rate = int(self.config.use_rel_loss_sum)
                 assert scale_rate > 0, "use_rel_loss_sum 参数错误"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device))
-                rel_loss = loss_fct(new_logits, new_labels) / scale_rate
+                rel_loss = loss_fct(new_logits, new_labels) / scale_rate / self.config.batch_size * 16
             else:
                 loss_fct = nn.CrossEntropyLoss(reduction='mean', weight=self.loss_weight.to(logits.device))
                 rel_loss = loss_fct(new_logits, new_labels)
