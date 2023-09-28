@@ -42,7 +42,10 @@ def run():
                skip_value=0.66
                )
 
-## Configuation Index
+    import wandb
+    os.makedirs("./output/alert", exist_ok=True)
+    wandb.init(project="alert", name=hostname, dir="./output/alert")
+    wandb.alert(title=f"{hostname}", text="Finished")
 
 ## Block Configuation
 block_configuation = [
