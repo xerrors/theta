@@ -1,10 +1,18 @@
 from main import main
 from xerrors.runner import Runner
 
+# 读取环境变量 .env
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
+# 获取主机名
+hostname = os.getenv("HOSTNAME")
+
 def run():
     # Configure Runner
     runner = Runner(
-        name="Oxen-512",
+        name=hostname + "-512",
         configuation_index="./configuation_dict.yaml",
         block_configuation=block_configuation,
     )

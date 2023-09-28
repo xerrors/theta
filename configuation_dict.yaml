@@ -1,6 +1,8 @@
 # Basic
 max_epochs: E
 lr: LR
+ner_lr: NLR
+rel_lr: RLR
 batch_size: BS
 test_batch_size: TBS
 max_seq_len: MaxLen
