@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 获取主机名
-hostname = os.getenv("HOSTNAME")
+hostname = os.getenv("HOSTNAME", "Kirin")
 
 def run():
     # Configure Runner
