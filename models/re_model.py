@@ -204,14 +204,12 @@ class REModel(pl.LightningModule):
 
                     # 2023-0510
                     strategy = self.config.use_filter_strategy
-                    if strategy == "0511":
-                        count = max(ent_count, int(gold_count - gold_count * r + pred_count * r))
-                    elif strategy == "0903":
+                    if strategy == "0903":
                         count = max(int(np.ceil(ent_count * (1 - r))), int(gold_count - gold_count * r + pred_count * r * 2))
                     elif strategy == "0927":
-                        count = max(0, int(gold_count - gold_count * r + pred_count * r))
+                        count = max(ent_count, int(gold_count - gold_count * r + pred_count * r * 2))
                     else:
-                        count = max(5, int(gold_count - gold_count * r + pred_count * r))
+                        count = max(ent_count, int(gold_count - gold_count * r + pred_count * r))
 
                 if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
                     draft_ent_groups = gold_draft_ent_groups[:count]
