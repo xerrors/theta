@@ -4,8 +4,8 @@ from xerrors.runner import Runner
 def run():
     # Configure Runner
     runner = Runner(
-        name="Kirin-512",
-        configuation_index=configuation_index,
+        name="Oxen-512",
+        configuation_index="./configuation_dict.yaml",
         block_configuation=block_configuation,
     )
 
@@ -15,7 +15,7 @@ def run():
     runner.add(use_ner="lmhead", use_ent_bio_input=False, seed=[42, 43, 44, 45, 46])
     runner.add(use_rel_loss_sum=50, rel_rate=0.5, rel_lr=[1e-4, 5e-4], rel_mlp_layer_num=[1, 2], seed=[42, 43, 44, 45, 46])
     # gamma
-    runner.add(use_thres_gamma=[0.1, 0.3, 0.5, 0.7], use_filter_strategy=["0927", "0928"], seed=[42, 43, 44, 45, 46])
+    runner.add(use_thres_gamma=0.5, use_filter_strategy=["0511"], seed=[42, 43, 44, 45, 46])
     runner.add(seed=46)
 
     # Add tests
@@ -35,50 +35,6 @@ def run():
                )
 
 ## Configuation Index
-configuation_index = dict(
-    # Basic
-    max_epochs="E",
-    lr="LR",
-    batch_size="BS",
-    test_batch_size="TBS",
-    max_seq_len="MaxLen",
-    optimizer="Opt",
-    # use ner
-    use_ner="NER",
-    ent_attn_layer_num="AttnL",
-    ent_mlp_layer_num="MLPL",
-    # use rel
-    use_rel="REL",
-    use_rel_opt1="R1",
-    use_rel_opt2="R2",
-    use_rel_opt3="R3",
-    use_rel_opt4="R4",
-    use_rel_ner="RN",
-    use_rel_loss_sum="Rsum",
-    rel_mlp_layer_num="RelMLP",
-    # use filter
-    use_filter_opt1="F1",
-    use_filter_opt2="F2",
-    use_filter_opt4="F4",
-    use_filter_opt5="F5",
-    use_filter_opt6="F6",
-    use_thres_val="ThresV",
-    use_thres_threshold="Thres",
-    use_filter_loss_sum="Fsum",
-    use_filter_strategy="Fstrtegy",
-    # Task
-    context_window="CW",
-    # Test
-    test_opt1="T1",
-    test_opt2="T2",
-    test_opt3="T3",
-    test_opt4="T4",
-    # rate
-    filter_rate="FR",
-    rel_rate="RR",
-    ner_rate="NR",
-    rel_ner_rate="RNR",
-)
 
 ## Block Configuation
 block_configuation = [

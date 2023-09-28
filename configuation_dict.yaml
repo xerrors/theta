@@ -1,0 +1,43 @@
+# Basic
+max_epochs: E
+lr: LR
+batch_size: BS
+test_batch_size: TBS
+max_seq_len: MaxLen
+optimizer: Opt
+# use ner
+use_ner: NER
+ent_attn_layer_num: AttnL
+ent_mlp_layer_num: MLPL
+# use rel
+use_rel: REL
+use_rel_opt1: R1
+use_rel_opt2: R2
+use_rel_opt3: R3
+use_rel_opt4: R4
+use_rel_ner: RN
+use_rel_loss_sum: Rsum
+rel_mlp_layer_num: RelMLP
+# use filter
+use_filter_opt1: F1
+use_filter_opt2: F2
+use_filter_opt4: F4
+use_filter_opt5: F5
+use_filter_opt6: F6
+use_thres_val: ThresV
+use_thres_threshold: Thres
+use_thres_gamma: Gamma
+use_filter_loss_sum: Fsum
+use_filter_strategy: Fstgy
+# Task
+context_window: CW
+# Test
+test_opt1: T1
+test_opt2: T2
+test_opt3: T3
+test_opt4: T4
+# rate
+filter_rate: FR
+rel_rate: RR
+ner_rate: NR
+rel_ner_rate: RNR
