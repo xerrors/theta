@@ -208,6 +208,8 @@ class REModel(pl.LightningModule):
                         count = max(int(np.ceil(ent_count * (1 - r))), int(gold_count - gold_count * r + pred_count * r * 2))
                     elif strategy == "0927":
                         count = max(ent_count, int(gold_count - gold_count * r + pred_count * r * 2))
+                    elif strategy == "0928":
+                        count = max(int(np.ceil(ent_count * (1 - r / 2)) + 1), int(gold_count - gold_count * r + pred_count * r * 2))
                     else:
                         count = max(ent_count, int(gold_count - gold_count * r + pred_count * r))
 
