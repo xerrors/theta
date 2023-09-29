@@ -12,6 +12,7 @@ use_ner: NER
 ent_attn_layer_num: AttnL
 ent_mlp_layer_num: MLPL
 use_ent_bio_input: BioIn
+ent_attn_range: AttnR
 # use rel
 use_rel: REL
 use_rel_opt1: R1
