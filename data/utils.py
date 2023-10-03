@@ -138,8 +138,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 span_mask[s_i, s_i:min(sent_end, s_i+max_span_length)] = 1
 
             # 实体的位置索引映射
-            start2idx = [i + sent_start for i in start2idx]
-            end2idx = [i + sent_start for i in end2idx] # 因为有 cls token
+            start2idx = [mi + sent_start for mi in start2idx]
+            end2idx = [mi + sent_start for mi in end2idx] # 因为有 cls token
 
             """关于命名实体识别的说明
             Rules:
