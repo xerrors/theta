@@ -27,7 +27,7 @@ precision: 16
 # reload_dataloaders_every_epoch: True
 
 # INFO: Model
-max_seq_len: 300
+max_seq_len: 400
 model_config: models/configs/bert.yaml # can not be modified in ext_config
 
 # INFO: Dataset
