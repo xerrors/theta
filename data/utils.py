@@ -223,6 +223,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
 
 
 def get_language_map_dict():
+    # 'PHYS', 'PER-SOC', 'EMP-ORG', 'ART', 'OTHER-AFF', 'GPE-AFF', 'DISC'
     ace_rel_map = {
         'NA': 'no relation in this sentence',
         'ART': 'artifact person',
@@ -230,7 +231,11 @@ def get_language_map_dict():
         'GEN-AFF': 'general affiliation',
         'PHYS': 'physical location',
         'PER-SOC': 'personal social',
-        'PART-WHOLE': 'part whole'
+        'PART-WHOLE': 'part whole',
+        'OTHER-AFF': 'organization or general affiliation',
+        'GPE-AFF': 'geopolitical affiliation',
+        'EMP-ORG': 'employment organization',
+        'DISC': 'discourse'
     }
 
     # ['NA', 'FAC', 'WEA', 'LOC', 'VEH', 'GPE', 'ORG', 'PER']

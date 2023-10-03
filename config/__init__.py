@@ -66,13 +66,13 @@ class Config(SimpleConfig):
         self.__load_config_from_args()
         self.__load_config(args.config)
 
-        # 2. 加载 model 和 dataset 的配置
-        self.model = self.parse_config(self.model_config, "model")
-        self.dataset = self.parse_config(self.dataset_config, "dataset")
-
-        # 3. 从 ext_config 中加载配置
+        # 2. 从 ext_config 中加载配置
         self.__load_ext_config()
         self.__replace_config_to_args()
+
+        # 3. 加载 model 和 dataset 的配置
+        self.model = self.parse_config(self.model_config, "model")
+        self.dataset = self.parse_config(self.dataset_config, "dataset")
 
         # 4. 将配置文件保存到实验输出文件夹里面
         self.handle_config()

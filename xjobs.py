@@ -19,7 +19,7 @@ def run():
 
     # Add arguments
     # runner.add(use_test_for_val=True, seed=[46])
-    runner.add(use_test_for_val=True, batch_size=4, seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2004/ace2004.yaml", seed=[42, 43, 44, 45, 46])
 
     # Add tests
     runner.add_test(
@@ -44,7 +44,7 @@ def run():
 
 ## Block Configuation
 block_configuation = [
-    "gpu", "tag", "run_id", "seed", "test_from_ckpt", "offline", "use_cache"
+    "gpu", "tag", "run_id", "seed", "test_from_ckpt", "offline", "use_cache", "dataset_config"
 ]
 
 

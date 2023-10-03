@@ -1,4 +1,10 @@
 # Dataset
+datasets/ace2004/English
+datasets/ace2004/corpus
+datasets/ace2004/fixed
+datasets/ace2004/json
+datasets/ace2004/result
+datasets/ace2004/text
 datasets/ace2005/English
 datasets/ace2005/corpus
 datasets/ace2005/fixed

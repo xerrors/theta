@@ -46,24 +46,31 @@ class DataModule(pl.LightningDataModule):
     def __get_dataset(self, mode):
         """根据不同的任务类型以及数据集类型使用不同的数据加载方法"""
         print(utils.green(f"Loading {mode} data..."))
-        if self.config.dataset.name in ["ace2005"]:
-            os.makedirs(os.path.join(self.config.dataset.data_dir, ".cache"), exist_ok=True)
-            cache_path = os.path.join(self.config.dataset.data_dir, ".cache", f"{mode}.cache")
+        if self.config.dataset.name in ["ace2005", "ace2004"]:
+
+            if self.config.dataset.name == "ace2005":
+                filename = self.config.dataset[mode]
+            elif self.config.dataset.name == "ace2004":
+                filename = self.config.dataset[mode][self.config.seed % 5]
+
+            cache_path = filename + ".cache"
             if os.path.exists(cache_path) and self.config.use_cache:
                 print(utils.green_background("Cache found!"), utils.green(f"Loading {mode} data from {cache_path}"))
-                datasets = torch.load(os.path.join(cache_path))
+                datasets = torch.load(cache_path)
             else:
-                datasets = self.get_dataset_ace(mode)
-                torch.save(datasets, os.path.join(cache_path))
+                datasets = self.get_dataset_ace(mode, filename)
+                if self.config.use_cache:
+                    torch.save(datasets, cache_path)
         else:
             raise NotImplementedError(
                 f"Dataset {self.config.dataset.name} not implemented!")
 
         return datasets
 
-    def get_dataset_ace(self, mode):
+    def get_dataset_ace(self, mode, filename=None):
 
-        dataset = Dataset(self.config.dataset[mode])
+        dataset = Dataset(filename)
+
         features = convert_dataset_to_samples(
             dataset, self.config, self.tokenizer, is_test=(mode == "test"))
 
