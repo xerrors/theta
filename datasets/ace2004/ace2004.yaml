@@ -1,5 +1,5 @@
 name: ace2004
-rel_num: 7
+rel_num: 6
 data_dir: datasets/ace2004
 na_label: None
 train:
@@ -20,5 +20,5 @@ test:
 - datasets/ace2004/json/test/2.json
 - datasets/ace2004/json/test/3.json
 - datasets/ace2004/json/test/4.json
-rels: ['PHYS', 'PER-SOC', 'EMP-ORG', 'ART', 'OTHER-AFF', 'GPE-AFF', 'DISC']
+rels: ['PHYS', 'PER-SOC', 'EMP-ORG', 'ART', 'OTHER-AFF', 'GPE-AFF']
 ents: ['FAC', 'GPE', 'LOC', 'ORG', 'PER', 'VEH', 'WEA']
