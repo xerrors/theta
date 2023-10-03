@@ -12,24 +12,21 @@ hostname = os.getenv("HOSTNAME", "Kirin")
 def run():
     # Configure Runner
     runner = Runner(
-        name=hostname + "-A512",
+        name=hostname + "-B512",
         configuation_index="./configuation_dict.yaml",
         block_configuation=block_configuation,
     )
 
     # Add arguments
-    runner.add(use_ent_bio_input=True, seed=[42, 43, 44, 45, 46])
-    runner.add(use_ner="lmhead", use_ent_bio_input=True, seed=[42, 43, 44, 45, 46])
-    runner.add(use_ner="lmhead", use_ent_bio_input=False, seed=[42, 43, 44, 45, 46])
-    runner.add(use_rel_loss_sum=50, rel_rate=0.5, rel_lr=[1e-4, 5e-4], rel_mlp_layer_num=[1, 2], seed=[42, 43, 44, 45, 46])
-    runner.add(seed=46)
+    # runner.add(use_test_for_val=True, seed=[46])
+    runner.add(use_test_for_val=True, batch_size=4, seed=[42, 43, 44, 45, 46])
 
     # Add tests
     runner.add_test(
         use_thres_val=True,
-        test_opt1=["last", "best"],
+        test_opt1=["best"],
         use_thres_threshold=[0.0005, 0.0001],
-        test_from_ckpt=[],
+        test_from_ckpt=["output/ouput-2023-10-03_06-30-56-Oxen-A512-Ts4V","output/ouput-2023-10-02_23-40-33-Oxen-A512Z-Ts4V","output/ouput-2023-10-02_22-20-06-Oxen-A512Z-Ts4V","output/ouput-2023-10-02_20-59-44-Oxen-A512Z-Ts4V","output/ouput-2023-10-02_19-31-37-Oxen-A512Z-Ts4V"],
         test_batch_size=1,
         offline=True,
         )
@@ -37,13 +34,13 @@ def run():
     runner.run(main,
                sort_by_seed=True,
                skip_index="test_f1",
-               skip_value=0.66
-               )
+               skip_value=0.67)
 
     import wandb
     os.makedirs("./output/alert", exist_ok=True)
     wandb.init(project="alert", name=hostname, dir="./output/alert")
     wandb.alert(title=f"{hostname}", text=f"Finished\n{str(runner.result_json)}")
+    wandb.finish(quiet=True)
 
 ## Block Configuation
 block_configuation = [

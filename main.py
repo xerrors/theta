@@ -76,8 +76,8 @@ def main(func_mode=False, **kwargs):
         config.save_best_model_path(model_checkpoint.best_model_path)
         config.save_config()
 
-        trainer.test(theta, datamodule=data)
-        # trainer.test(theta, datamodule=data, ckpt_path=model_checkpoint.best_model_path)
+        # trainer.test(theta, datamodule=data)
+        trainer.test(theta, datamodule=data, ckpt_path=model_checkpoint.best_model_path)
         wandb.finish(quiet=True)
 
     result = {
