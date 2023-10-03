@@ -90,3 +90,5 @@ use_loss_fix: True
 use_ent_attn: True
 ent_attn_range: 10
 use_thres_train: True
+
+use_test_for_val: True
