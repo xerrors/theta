@@ -45,6 +45,3 @@ filter_rate: FR
 rel_rate: RR
 ner_rate: NR
 rel_ner_rate: RNR
-
-# delete
-use_test_for_val: Ts4V

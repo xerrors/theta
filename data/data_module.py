@@ -30,12 +30,7 @@ class DataModule(pl.LightningDataModule):
     def setup(self, stage=None):
         if stage == "fit" or stage is None:
             self.data_train = self.__get_dataset("train")
-
-            # update 2023.10.02
-            if self.config.use_test_for_val:
-                self.data_val = self.__get_dataset("test")
-            else:
-                self.data_val = self.__get_dataset("val")
+            self.data_val = self.__get_dataset("val")
 
         if stage == "test" or stage is None:
             self.data_test = self.__get_dataset("test")

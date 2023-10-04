@@ -18,7 +18,6 @@ def run():
     )
 
     # Add arguments
-    # runner.add(use_test_for_val=True, seed=[46])
     runner.add(dataset_config="datasets/ace2004/ace2004.yaml", use_rel_ner="no_mask",  seed=[43, 44, 45, 46])
     runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_rel_ner="no_mask",  seed=[43, 44, 45, 46])
     runner.add(dataset_config="datasets/ace2005/ace2005.yaml", seed=[43, 44, 45, 46])
@@ -27,8 +26,8 @@ def run():
     runner.add_test(
         use_thres_val=True,
         test_opt1=["best"],
-        use_thres_threshold=[0.0005, 0.0001],
-        test_from_ckpt=["output/ouput-2023-10-03_06-30-56-Oxen-A512-Ts4V","output/ouput-2023-10-02_23-40-33-Oxen-A512Z-Ts4V","output/ouput-2023-10-02_22-20-06-Oxen-A512Z-Ts4V","output/ouput-2023-10-02_20-59-44-Oxen-A512Z-Ts4V","output/ouput-2023-10-02_19-31-37-Oxen-A512Z-Ts4V"],
+        use_thres_threshold=[0.0005, 0.0001, 0.00005],
+        test_from_ckpt=["output/ouput-2023-10-04_09-59-31-Oxen-B512","output/ouput-2023-10-04_08-52-29-Oxen-B512","output/ouput-2023-10-04_07-45-22-Oxen-B512","output/ouput-2023-10-04_06-38-16-Oxen-B512","output/ouput-2023-10-04_05-31-21-Oxen-B512","output/ouput-2023-10-04_04-23-06-Oxen-B512","output/ouput-2023-10-04_03-15-35-Oxen-B512","output/ouput-2023-10-04_02-07-53-Oxen-B512","output/ouput-2023-10-04_01-00-11-Oxen-B512","output/ouput-2023-10-03_23-52-18-Oxen-B512"],
         test_batch_size=1,
         offline=True,
         )
