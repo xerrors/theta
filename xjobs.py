@@ -19,7 +19,9 @@ def run():
 
     # Add arguments
     # runner.add(use_test_for_val=True, seed=[46])
-    runner.add(dataset_config="datasets/ace2004/ace2004.yaml", seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2004/ace2004.yaml", use_rel_ner="no_mask",  seed=[43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_rel_ner="no_mask",  seed=[43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", seed=[43, 44, 45, 46])
 
     # Add tests
     runner.add_test(
@@ -31,10 +33,7 @@ def run():
         offline=True,
         )
 
-    runner.run(main,
-               sort_by_seed=True,
-               skip_index="test_f1",
-               skip_value=0.67)
+    runner.run(main, sort_by_seed=True)
 
     import wandb
     os.makedirs("./output/alert", exist_ok=True)

@@ -398,7 +398,10 @@ class REModel(pl.LightningModule):
 
 
             if self.config.use_rel_ner:
-                sent_mask = torch.where(rel_attention_mask_pad == 1, 1, 0).to(device)
+                if self.config.use_rel_ner == "no_mask":
+                    sent_mask = torch.where(rel_attention_mask_pad > 0, 1, 0).to(device)
+                else:
+                    sent_mask = torch.where(rel_attention_mask_pad == 1, 1, 0).to(device)
                 logits, sent_ner_loss = theta.ner_model(rel_stage_hs, labels=(bio_tags - theta.ent_ids[0]), mask=sent_mask)
 
             if self.config.use_rel_opt1 is str and self.config.use_rel_opt1.endswith("+"):
