@@ -1,3 +1,4 @@
+from collections import defaultdict
 import itertools
 import math
 import torch
@@ -61,6 +62,8 @@ class REModel(pl.LightningModule):
         self.total_val = 0
         self.remain_gold = 0
         self.total_gold = 0
+
+        self.statistic = defaultdict(int)
 
         self.loss_weight = torch.FloatTensor([config.get("na_rel_weight", 1)] + [1] * self.rel_type_num)
 
@@ -133,6 +136,19 @@ class REModel(pl.LightningModule):
         if mode != "predict":
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
             labels = theta.filter.get_filter_label(entities, triples, logits, map_dict)
+
+            if mode == "train":
+                for i in range(self.rel_type_num):
+                    self.statistic[f"train_gold_label_{i}_count"] += (labels == i).sum().item()
+                self.statistic["train_gold_label_count"] += len(labels)
+            elif return_loss:
+                for i in range(self.rel_type_num):
+                    self.statistic[f"val_gold_label_{i}_count"] += (labels == i).sum().item()
+                self.statistic["val_gold_label_count"] += len(labels)
+            else:
+                for i in range(self.rel_type_num):
+                    self.statistic[f"val_pred_label_{i}_count"] += (labels == i).sum().item()
+                self.statistic["val_pred_label_count"] += len(labels)
         else:
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode)
             labels = None
@@ -192,15 +208,6 @@ class REModel(pl.LightningModule):
                     gamma = self.config.get("use_thres_gamma", 0.5)
                     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > gamma])
                     r = theta.filter.train_metrics.get("recall", 0)
-
-                    # if self.config.use_filter_opt5 and self.config.use_filter_opt5.startswith("u"):
-                    #     l = int(self.config.use_filter_opt5[1:])
-                    #     r = theta.filter.train_metrics.get("recall", 0) # note recall is lower than the pred count
-                    #     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.5])
-                    # elif self.config.use_filter_opt5 and self.config.use_filter_opt5.startswith("x"):
-                    #     l = int(self.config.use_filter_opt5[1:])
-                    #     r = theta.filter.train_metrics.get("recall", 0)
-                    #     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > 0.8])
 
                     # 2023-0510
                     strategy = self.config.use_filter_strategy
@@ -314,14 +321,24 @@ class REModel(pl.LightningModule):
 
             if mode == "train":
                 self.remain += marker_mask - 1
-                self.total += len(pred_draft_ent_groups)
+                self.total += len(gold_draft_ent_groups)
+                self.statistic["train_gold_count"] += len(gold_draft_ent_groups)
+                self.statistic["train_gold_filtered_count"] += len(draft_ent_groups)
+                self.statistic["train_gold_use_count"] += marker_mask - 1
+                self.statistic["train_pred_count"] += pred_count
             elif mode == "dev" or mode == "test":
                 if return_loss:
                     self.remain_gold += marker_mask - 1
                     self.total_gold += len(pred_draft_ent_groups)
+                    self.statistic["val_gold_count"] += len(pred_draft_ent_groups)
+                    self.statistic["val_gold_filtered_count"] += len([1 for e in pred_draft_ent_groups if e[2] > cur_threshold])
+                    self.statistic["val_gold_use_count"] += marker_mask - 1
                 else:
-                    self.remain_val += marker_mask
+                    self.remain_val += marker_mask - 1
                     self.total_val += len(pred_draft_ent_groups)
+                    self.statistic["val_pred_count"] += len(pred_draft_ent_groups)
+                    self.statistic["val_pred_filtered_count"] += len([1 for e in pred_draft_ent_groups if e[2] > cur_threshold])
+                    self.statistic["val_pred_use_count"] += marker_mask - 1
 
         rel_input_ids = nn.utils.rnn.pad_sequence(rel_input_ids, batch_first=True, padding_value=pad_token)
         rel_positional_ids = nn.utils.rnn.pad_sequence(rel_positional_ids, batch_first=True, padding_value=0)
@@ -461,6 +478,19 @@ class REModel(pl.LightningModule):
             triple_labels = self.get_triples_label(triples, device, ent_groups, mode=mode, epoch=theta.current_epoch)
             assert len(ent_groups) == len(rel_hidden_states) == len(triple_labels)
 
+            if mode == "train":
+                for li in range(self.rel_type_num):
+                    self.statistic[f"train_gold_label_{li}_filtered_count"] += (triple_labels == li).sum().item()
+                self.statistic["train_gold_label_count"] += len(triple_labels)
+            elif return_loss:
+                for li in range(self.rel_type_num):
+                    self.statistic[f"val_gold_label_{li}_filtered_count"] += (triple_labels == li).sum().item()
+                self.statistic["val_gold_label_count"] += len(triple_labels)
+            else:
+                for li in range(self.rel_type_num):
+                    self.statistic[f"val_pred_label_{li}_filtered_count"] += (triple_labels == li).sum().item()
+                self.statistic["val_pred_label_count"] += len(triple_labels)
+
         else:
             triple_labels = None
 
@@ -567,6 +597,74 @@ class REModel(pl.LightningModule):
             return (triples_pred, ent_groups)
 
         return (triples_pred,)
+
+    def log_statistic_train(self):
+        self.log("statistic/train_gold_count", self.statistic["train_gold_count"])
+        self.log("statistic/train_gold_filtered_count", self.statistic["train_gold_filtered_count"])
+        self.log("statistic/train_gold_use_count", self.statistic["train_gold_use_count"])
+        self.log("statistic/train_pred_count", self.statistic["train_pred_count"])
+        self.log("statistic/train_filter_rate", self.statistic["train_gold_filtered_count"] / (self.statistic["train_gold_count"] + 1e-8))
+        self.log("statistic/train_filter_rate_plus", self.statistic["train_gold_use_count"] / (self.statistic["train_gold_count"] + 1e-8))
+        self.log("statistic/train_filter_rate_pred", self.statistic["train_pred_count"] / (self.statistic["train_gold_count"] + 1e-8))
+        self.statistic["train_gold_count"] = 0
+        self.statistic["train_gold_filtered_count"] = 0
+        self.statistic["train_gold_use_count"] = 0
+        self.statistic["train_pred_count"] = 0
+
+        self.log("statistic/train_gold_label_count", self.statistic["train_gold_label_count"])
+        self.log("statistic/train_gold_label_filtered_count", self.statistic["train_gold_label_filtered_count"])
+        for i in range(self.rel_type_num):
+            self.log(f"statistic/train_gold_label_{i}_count", self.statistic[f"train_gold_label_{i}_count"])
+            self.log(f"statistic/train_gold_label_{i}_filtered_count", self.statistic[f"train_gold_label_{i}_filtered_count"])
+            self.log(f"statistic/train_gold_label_{i}_rate", self.statistic[f"train_gold_label_{i}_count"] / (self.statistic["train_gold_label_count"] + 1e-8))
+            self.log(f"statistic/train_gold_label_{i}_filtered_rate", self.statistic[f"train_gold_label_{i}_filtered_count"] / (self.statistic["train_gold_label_filtered_count"] + 1e-8))
+            self.statistic[f"train_gold_label_{i}_filtered_count"] = 0
+            self.statistic[f"train_gold_label_{i}_count"] = 0
+
+        self.statistic["train_gold_label_count"] = 0
+        self.statistic["train_gold_label_filtered_count"] = 0
+
+    def log_statistic_val(self):
+        self.log("statistic/val_gold_count", self.statistic["val_gold_count"])
+        self.log("statistic/val_gold_filtered_count", self.statistic["val_gold_filtered_count"])
+        self.log("statistic/val_gold_use_count", self.statistic["val_gold_use_count"])
+        self.log("statistic/val_pred_count", self.statistic["val_pred_count"])
+        self.log("statistic/val_pred_filtered_count", self.statistic["val_pred_filtered_count"])
+        self.log("statistic/val_pred_use_count", self.statistic["val_pred_use_count"])
+        self.log("statistic/val_gold_filter_rate", self.statistic["val_gold_filtered_count"] / (self.statistic["val_gold_count"] + 1e-8))
+        self.log("statistic/val_gold_filter_rate_plus", self.statistic["val_gold_use_count"] / (self.statistic["val_gold_count"] + 1e-8))
+        self.log("statistic/val_pred_filter_rate", self.statistic["val_pred_filtered_count"] / (self.statistic["val_pred_count"] + 1e-8))
+        self.log("statistic/val_pred_filter_rate_plus", self.statistic["val_pred_use_count"] / (self.statistic["val_pred_count"] + 1e-8))
+        self.statistic["val_gold_count"] = 0
+        self.statistic["val_gold_filtered_count"] = 0
+        self.statistic["val_gold_use_count"] = 0
+        self.statistic["val_pred_count"] = 0
+        self.statistic["val_pred_filtered_count"] = 0
+        self.statistic["val_pred_use_count"] = 0
+
+        self.log("statistic/val_gold_label_count", self.statistic["val_gold_label_count"])
+        self.log("statistic/val_gold_label_filtered_count", self.statistic["val_gold_label_filtered_count"])
+        self.log("statistic/val_pred_label_count", self.statistic["val_pred_label_count"])
+        self.log("statistic/val_pred_label_filtered_count", self.statistic["val_pred_label_filtered_count"])
+        for i in range(self.rel_type_num):
+            self.log(f"statistic/val_gold_label_{i}_count", self.statistic[f"val_gold_label_{i}_count"])
+            self.log(f"statistic/val_gold_label_{i}_filtered_count", self.statistic[f"val_gold_label_{i}_filtered_count"])
+            self.log(f"statistic/val_pred_label_{i}_count", self.statistic[f"val_pred_label_{i}_count"])
+            self.log(f"statistic/val_pred_label_{i}_filtered_count", self.statistic[f"val_pred_label_{i}_filtered_count"])
+            self.log(f"statistic/val_gold_label_{i}_rate", self.statistic[f"val_gold_label_{i}_count"] / (self.statistic["val_gold_label_count"] + 1e-8))
+            self.log(f"statistic/val_gold_label_{i}_filtered_rate", self.statistic[f"val_gold_label_{i}_filtered_count"] / (self.statistic["val_gold_label_filtered_count"] + 1e-8))
+            self.log(f"statistic/val_pred_label_{i}_rate", self.statistic[f"val_pred_label_{i}_count"] / (self.statistic["val_gold_label_count"] + 1e-8))
+            self.log(f"statistic/val_pred_label_{i}_filtered_rate", self.statistic[f"val_pred_label_{i}_filtered_count"] / (self.statistic["val_pred_label_filtered_count"] + 1e-8))
+            self.statistic[f"val_gold_label_{i}_count"] = 0
+            self.statistic[f"val_gold_label_{i}_filtered_count"] = 0
+            self.statistic[f"val_pred_label_{i}_count"] = 0
+            self.statistic[f"val_pred_label_{i}_filtered_count"] = 0
+
+        self.statistic["val_gold_label_count"] = 0
+        self.statistic["val_gold_label_filtered_count"] = 0
+        self.statistic["val_pred_label_count"] = 0
+        self.statistic["val_pred_label_filtered_count"] = 0
+
 
     def log_ent_pair_info(self):
         self.filter_score["precision"] = self.hit_count / (self.rel_count + 1e-8)

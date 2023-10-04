@@ -273,6 +273,7 @@ class FilterModel(pl.LightningModule):
 
 
     def log_filter_val_metrics(self):
+        """Fake validation metrics, just for logging."""
         if self.pred_val is not None and self.labels_val is not None:
             labels = self.labels_val.cpu().numpy()
             pred = self.pred_val.cpu().numpy()

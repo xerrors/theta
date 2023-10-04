@@ -387,6 +387,7 @@ class Theta(pl.LightningModule):
     def training_epoch_end(self, outputs):
         self.filter.log_filter_train_metrics()
         self.rel_model.log_filter_rate()
+        self.rel_model.log_statistic_train()
 
     def validation_step(self, batch, batch_idx):
         output = self(batch, mode="dev")
@@ -405,6 +406,7 @@ class Theta(pl.LightningModule):
         self.filter.log_filter_val_metrics()
         self.rel_model.log_ent_pair_info()
         self.rel_model.log_filter_rate_val()
+        self.rel_model.log_statistic_val()
 
     def test_step(self, batch, batch_idx):
         output = self(batch, mode="test")
@@ -430,6 +432,7 @@ class Theta(pl.LightningModule):
         self.filter.log_filter_val_metrics()
         self.rel_model.log_ent_pair_info()
         self.rel_model.log_filter_rate_val()
+        self.rel_model.log_statistic_val()
 
     def eval_step_output(self, batch, output):
         # batch = batch_filter(batch, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id)
