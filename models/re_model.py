@@ -63,7 +63,7 @@ class REModel(pl.LightningModule):
         self.remain_gold = 0
         self.total_gold = 0
 
-        self.statistic = defaultdict(int)
+        self.statistic = defaultdict(float)
 
         self.loss_weight = torch.FloatTensor([config.get("na_rel_weight", 1)] + [1] * self.rel_type_num)
 
@@ -153,7 +153,7 @@ class REModel(pl.LightningModule):
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode)
             labels = None
 
-        max_len= 512
+        max_len= 512 #  if mode == "train" else 1024
         ent_groups = []
         bio_tags = []
         rel_input_ids = []
@@ -481,15 +481,15 @@ class REModel(pl.LightningModule):
             if mode == "train":
                 for li in range(self.rel_type_num):
                     self.statistic[f"train_gold_label_{li}_filtered_count"] += (triple_labels == li).sum().item()
-                self.statistic["train_gold_label_count"] += len(triple_labels)
+                self.statistic["train_gold_label_filtered_count"] += len(triple_labels)
             elif return_loss:
                 for li in range(self.rel_type_num):
                     self.statistic[f"val_gold_label_{li}_filtered_count"] += (triple_labels == li).sum().item()
-                self.statistic["val_gold_label_count"] += len(triple_labels)
+                self.statistic["val_gold_label_filtered_count"] += len(triple_labels)
             else:
                 for li in range(self.rel_type_num):
                     self.statistic[f"val_pred_label_{li}_filtered_count"] += (triple_labels == li).sum().item()
-                self.statistic["val_pred_label_count"] += len(triple_labels)
+                self.statistic["val_pred_label_filtered_count"] += len(triple_labels)
 
         else:
             triple_labels = None
@@ -606,10 +606,10 @@ class REModel(pl.LightningModule):
         self.log("statistic/train_filter_rate", self.statistic["train_gold_filtered_count"] / (self.statistic["train_gold_count"] + 1e-8))
         self.log("statistic/train_filter_rate_plus", self.statistic["train_gold_use_count"] / (self.statistic["train_gold_count"] + 1e-8))
         self.log("statistic/train_filter_rate_pred", self.statistic["train_pred_count"] / (self.statistic["train_gold_count"] + 1e-8))
-        self.statistic["train_gold_count"] = 0
-        self.statistic["train_gold_filtered_count"] = 0
-        self.statistic["train_gold_use_count"] = 0
-        self.statistic["train_pred_count"] = 0
+        self.statistic["train_gold_count"] = 0.0
+        self.statistic["train_gold_filtered_count"] = 0.0
+        self.statistic["train_gold_use_count"] = 0.0
+        self.statistic["train_pred_count"] = 0.0
 
         self.log("statistic/train_gold_label_count", self.statistic["train_gold_label_count"])
         self.log("statistic/train_gold_label_filtered_count", self.statistic["train_gold_label_filtered_count"])
@@ -618,11 +618,11 @@ class REModel(pl.LightningModule):
             self.log(f"statistic/train_gold_label_{i}_filtered_count", self.statistic[f"train_gold_label_{i}_filtered_count"])
             self.log(f"statistic/train_gold_label_{i}_rate", self.statistic[f"train_gold_label_{i}_count"] / (self.statistic["train_gold_label_count"] + 1e-8))
             self.log(f"statistic/train_gold_label_{i}_filtered_rate", self.statistic[f"train_gold_label_{i}_filtered_count"] / (self.statistic["train_gold_label_filtered_count"] + 1e-8))
-            self.statistic[f"train_gold_label_{i}_filtered_count"] = 0
-            self.statistic[f"train_gold_label_{i}_count"] = 0
+            self.statistic[f"train_gold_label_{i}_filtered_count"] = 0.0
+            self.statistic[f"train_gold_label_{i}_count"] = 0.0
 
-        self.statistic["train_gold_label_count"] = 0
-        self.statistic["train_gold_label_filtered_count"] = 0
+        self.statistic["train_gold_label_count"] = 0.0
+        self.statistic["train_gold_label_filtered_count"] = 0.0
 
     def log_statistic_val(self):
         self.log("statistic/val_gold_count", self.statistic["val_gold_count"])
@@ -635,12 +635,12 @@ class REModel(pl.LightningModule):
         self.log("statistic/val_gold_filter_rate_plus", self.statistic["val_gold_use_count"] / (self.statistic["val_gold_count"] + 1e-8))
         self.log("statistic/val_pred_filter_rate", self.statistic["val_pred_filtered_count"] / (self.statistic["val_pred_count"] + 1e-8))
         self.log("statistic/val_pred_filter_rate_plus", self.statistic["val_pred_use_count"] / (self.statistic["val_pred_count"] + 1e-8))
-        self.statistic["val_gold_count"] = 0
-        self.statistic["val_gold_filtered_count"] = 0
-        self.statistic["val_gold_use_count"] = 0
-        self.statistic["val_pred_count"] = 0
-        self.statistic["val_pred_filtered_count"] = 0
-        self.statistic["val_pred_use_count"] = 0
+        self.statistic["val_gold_count"] = 0.0
+        self.statistic["val_gold_filtered_count"] = 0.0
+        self.statistic["val_gold_use_count"] = 0.0
+        self.statistic["val_pred_count"] = 0.0
+        self.statistic["val_pred_filtered_count"] = 0.0
+        self.statistic["val_pred_use_count"] = 0.0
 
         self.log("statistic/val_gold_label_count", self.statistic["val_gold_label_count"])
         self.log("statistic/val_gold_label_filtered_count", self.statistic["val_gold_label_filtered_count"])
@@ -655,15 +655,15 @@ class REModel(pl.LightningModule):
             self.log(f"statistic/val_gold_label_{i}_filtered_rate", self.statistic[f"val_gold_label_{i}_filtered_count"] / (self.statistic["val_gold_label_filtered_count"] + 1e-8))
             self.log(f"statistic/val_pred_label_{i}_rate", self.statistic[f"val_pred_label_{i}_count"] / (self.statistic["val_gold_label_count"] + 1e-8))
             self.log(f"statistic/val_pred_label_{i}_filtered_rate", self.statistic[f"val_pred_label_{i}_filtered_count"] / (self.statistic["val_pred_label_filtered_count"] + 1e-8))
-            self.statistic[f"val_gold_label_{i}_count"] = 0
-            self.statistic[f"val_gold_label_{i}_filtered_count"] = 0
-            self.statistic[f"val_pred_label_{i}_count"] = 0
-            self.statistic[f"val_pred_label_{i}_filtered_count"] = 0
+            self.statistic[f"val_gold_label_{i}_count"] = 0.0
+            self.statistic[f"val_gold_label_{i}_filtered_count"] = 0.0
+            self.statistic[f"val_pred_label_{i}_count"] = 0.0
+            self.statistic[f"val_pred_label_{i}_filtered_count"] = 0.0
 
-        self.statistic["val_gold_label_count"] = 0
-        self.statistic["val_gold_label_filtered_count"] = 0
-        self.statistic["val_pred_label_count"] = 0
-        self.statistic["val_pred_label_filtered_count"] = 0
+        self.statistic["val_gold_label_count"] = 0.0
+        self.statistic["val_gold_label_filtered_count"] = 0.0
+        self.statistic["val_pred_label_count"] = 0.0
+        self.statistic["val_pred_label_filtered_count"] = 0.0
 
 
     def log_ent_pair_info(self):
