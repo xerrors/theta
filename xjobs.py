@@ -18,8 +18,9 @@ def run():
     )
 
     # Add arguments
-    runner.add(dataset_config="datasets/ace2004/ace2004.yaml", use_rel_ner="no_mask",  seed=[42, 43, 44, 45, 46])
-    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_rel_ner="no_mask",  seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2004/ace2004.yaml", use_filter_shuffle=True,  seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_filter_shuffle=True,  seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_filter_shuffle=True, use_mask=True, seed=[42, 43, 44, 45, 46])
 
     # Add tests
     runner.add_test(

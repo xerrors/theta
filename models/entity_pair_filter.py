@@ -306,7 +306,7 @@ class FilterModel(pl.LightningModule):
         if len(pairs) > 0:
 
             # some tricks
-            if self.enable and mode == "train":
+            if self.enable and (mode == "train" or self.config.use_filter_shuffle):
                 random.shuffle(pairs)
 
             for sub_pos, obj_pos in pairs:
