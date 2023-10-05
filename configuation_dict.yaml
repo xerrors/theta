@@ -33,6 +33,7 @@ use_thres_threshold: Thres
 use_thres_gamma: Gamma
 use_filter_loss_sum: Fsum
 use_filter_strategy: Fstgy
+use_filter_shuffle: Fshfl
 # Task
 context_window: CW
 # Test
