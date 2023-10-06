@@ -429,10 +429,10 @@ class Theta(pl.LightningModule):
         self.log_dict_values({'test/f1': f1, 'test/p': p, 'test/r': r})
         self.log_dict_values({'test/ner_f1': ner_f1, 'test/ner_p': ner_p, 'test/ner_r': ner_r})
         self.log_dict_values({'test/rel_f1': rel_f1, 'test/rel_p': rel_p, 'test/rel_r': rel_r})
-        self.filter.log_filter_val_metrics()
-        self.rel_model.log_ent_pair_info()
-        self.rel_model.log_filter_rate_val()
-        self.rel_model.log_statistic_val()
+        # self.filter.log_filter_val_metrics()
+        # self.rel_model.log_ent_pair_info()
+        # self.rel_model.log_filter_rate_val()
+        # self.rel_model.log_statistic_val()
 
     def eval_step_output(self, batch, output):
         # batch = batch_filter(batch, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id)
