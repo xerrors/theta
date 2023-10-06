@@ -138,15 +138,15 @@ class REModel(pl.LightningModule):
             labels = theta.filter.get_filter_label(entities, triples, logits, map_dict)
 
             if mode == "train":
-                for i in range(self.rel_type_num):
+                for i in range(self.rel_type_num+1):
                     self.statistic[f"train_gold_label_{i}_count"] += (labels == i).sum().item()
                 self.statistic["train_gold_label_count"] += len(labels)
             elif return_loss:
-                for i in range(self.rel_type_num):
+                for i in range(self.rel_type_num+1):
                     self.statistic[f"val_gold_label_{i}_count"] += (labels == i).sum().item()
                 self.statistic["val_gold_label_count"] += len(labels)
             else:
-                for i in range(self.rel_type_num):
+                for i in range(self.rel_type_num+1):
                     self.statistic[f"val_pred_label_{i}_count"] += (labels == i).sum().item()
                 self.statistic["val_pred_label_count"] += len(labels)
         else:
@@ -479,15 +479,15 @@ class REModel(pl.LightningModule):
             assert len(ent_groups) == len(rel_hidden_states) == len(triple_labels)
 
             if mode == "train":
-                for li in range(self.rel_type_num):
+                for li in range(self.rel_type_num+1):
                     self.statistic[f"train_gold_label_{li}_filtered_count"] += (triple_labels == li).sum().item()
                 self.statistic["train_gold_label_filtered_count"] += len(triple_labels)
             elif return_loss:
-                for li in range(self.rel_type_num):
+                for li in range(self.rel_type_num+1):
                     self.statistic[f"val_gold_label_{li}_filtered_count"] += (triple_labels == li).sum().item()
                 self.statistic["val_gold_label_filtered_count"] += len(triple_labels)
             else:
-                for li in range(self.rel_type_num):
+                for li in range(self.rel_type_num+1):
                     self.statistic[f"val_pred_label_{li}_filtered_count"] += (triple_labels == li).sum().item()
                 self.statistic["val_pred_label_filtered_count"] += len(triple_labels)
 
@@ -616,7 +616,7 @@ class REModel(pl.LightningModule):
 
         self.log("statistic/train_gold_label_count", self.statistic["train_gold_label_count"])
         self.log("statistic/train_gold_label_filtered_count", self.statistic["train_gold_label_filtered_count"])
-        for i in range(self.rel_type_num):
+        for i in range(self.rel_type_num+1):
             self.log(f"statistic/train_gold_label_{i}_count", self.statistic[f"train_gold_label_{i}_count"])
             self.log(f"statistic/train_gold_label_{i}_filtered_count", self.statistic[f"train_gold_label_{i}_filtered_count"])
             self.log(f"statistic/train_gold_label_{i}_rate", self.statistic[f"train_gold_label_{i}_count"] / (self.statistic["train_gold_label_count"] + 1e-8))
@@ -649,14 +649,14 @@ class REModel(pl.LightningModule):
         self.log("statistic/val_gold_label_filtered_count", self.statistic["val_gold_label_filtered_count"])
         self.log("statistic/val_pred_label_count", self.statistic["val_pred_label_count"])
         self.log("statistic/val_pred_label_filtered_count", self.statistic["val_pred_label_filtered_count"])
-        for i in range(self.rel_type_num):
+        for i in range(self.rel_type_num+1):
             self.log(f"statistic/val_gold_label_{i}_count", self.statistic[f"val_gold_label_{i}_count"])
             self.log(f"statistic/val_gold_label_{i}_filtered_count", self.statistic[f"val_gold_label_{i}_filtered_count"])
             self.log(f"statistic/val_pred_label_{i}_count", self.statistic[f"val_pred_label_{i}_count"])
             self.log(f"statistic/val_pred_label_{i}_filtered_count", self.statistic[f"val_pred_label_{i}_filtered_count"])
             self.log(f"statistic/val_gold_label_{i}_rate", self.statistic[f"val_gold_label_{i}_count"] / (self.statistic["val_gold_label_count"] + 1e-8))
             self.log(f"statistic/val_gold_label_{i}_filtered_rate", self.statistic[f"val_gold_label_{i}_filtered_count"] / (self.statistic["val_gold_label_filtered_count"] + 1e-8))
-            self.log(f"statistic/val_pred_label_{i}_rate", self.statistic[f"val_pred_label_{i}_count"] / (self.statistic["val_gold_label_count"] + 1e-8))
+            self.log(f"statistic/val_pred_label_{i}_rate", self.statistic[f"val_pred_label_{i}_count"] / (self.statistic["val_pred_label_count"] + 1e-8))
             self.log(f"statistic/val_pred_label_{i}_filtered_rate", self.statistic[f"val_pred_label_{i}_filtered_count"] / (self.statistic["val_pred_label_filtered_count"] + 1e-8))
             self.statistic[f"val_gold_label_{i}_count"] = 0.0
             self.statistic[f"val_gold_label_{i}_filtered_count"] = 0.0
