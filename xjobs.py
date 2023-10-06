@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # 获取主机名
-hostname = os.getenv("HOSTNAME", "Kirin")
+hostname = os.getenv("HOSTNAME", "K")
 
 """
 # Log
@@ -19,7 +19,7 @@ hostname = os.getenv("HOSTNAME", "Kirin")
 def run():
     # Configure Runner
     runner = Runner(
-        name=hostname + "-D",
+        name=hostname + "D",
         configuation_index="./configuation_dict.yaml",
         block_configuation=block_configuation,
     )
@@ -37,7 +37,7 @@ def run():
         test_batch_size=1,
         offline=True)
 
-    runner.run(main, sort_by_seed=True)
+    runner.run(main, sort_by_seed=True, start_index=0)
 
     import wandb
     os.makedirs("./output/alert", exist_ok=True)
