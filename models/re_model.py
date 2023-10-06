@@ -582,6 +582,9 @@ class REModel(pl.LightningModule):
             new_logits = logits.view(-1, len(self.rel_ids))
             new_labels = triple_labels.view(-1)
 
+            if self.config.use_rel_na_warmup:
+                self.loss_weight[0] = self.loss_weight[0] * min(1, (theta.current_epoch + 1) / self.config.max_epochs)
+
             if self.config.use_rel_loss_sum:
                 scale_rate = int(self.config.use_rel_loss_sum)
                 assert scale_rate > 0, "use_rel_loss_sum 参数错误"

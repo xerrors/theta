@@ -46,3 +46,6 @@ filter_rate: FR
 rel_rate: RR
 ner_rate: NR
 rel_ner_rate: RNR
+
+# test
+use_rel_na_warmup: NA_Warm
