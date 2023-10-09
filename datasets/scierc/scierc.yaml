@@ -1,9 +1,9 @@
 name: scierc
 rel_num: 7
-data_dir: datasets/ace2005
+data_dir: datasets/scierc
 na_label: None
 train: datasets/scierc/json/train.json
 val: datasets/scierc/json/test.json
 test: datasets/scierc/json/test.json
-rels: ['USED-FOR', 'FEATURE-OF', ' HYPONYM-OF', 'PART-OF', 'COMPARE', 'CONJUNCTION', 'COREFERENCE']
-ents: ['TASK', 'METHOD', 'METRIC', 'MATERIAL', 'OTHERSCIENTIFICTERM', 'GENERIC']
+rels: ['USED-FOR', 'FEATURE-OF', 'HYPONYM-OF', 'PART-OF', 'COMPARE', 'CONJUNCTION', 'EVALUATE-FOR']
+ents: ['Task', 'Method', 'Metric', 'Material', 'OtherScientificTerm', 'Generic']
