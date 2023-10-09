@@ -202,6 +202,7 @@ class REModel(pl.LightningModule):
                 pred_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
                 gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode, pred=logits if self.config.use_thres_plus else None)
 
+                count = len(gold_draft_ent_groups)
                 if self.config.use_thres_train and mode == "train":
                     ent_count = len(entity)
                     gold_count = len(gold_draft_ent_groups)
@@ -587,7 +588,7 @@ class REModel(pl.LightningModule):
             new_labels = triple_labels.view(-1)
 
             if self.config.use_rel_na_warmup:
-                self.loss_weight[0] = float(self.config.get("na_rel_weight", 1)) * min(1, (theta.current_epoch + 1) / self.config.max_epochs)
+                self.loss_weight[0] = float(self.config.get("na_rel_weight", 1)) * min(1, (theta.current_epoch + 1) / int(self.config.use_rel_na_warmup))
 
             if self.config.use_rel_loss_sum:
                 scale_rate = int(self.config.use_rel_loss_sum)

@@ -1,3 +1,5 @@
+import os
+os.environ['CURL_CA_BUNDLE'] = '' # 真是闹了鬼了 https://github.com/huggingface/transformers/issues/17611#issuecomment-1323272726
 from main import main
 from xerrors.runner import Runner
 
@@ -25,8 +27,8 @@ def run():
     )
 
     # Add arguments
-    # runner.add(dataset_config="datasets/scierc/scierc.yaml", batch_size=4, use_warmup_rel=0, seed=[42, 43, 44, 45, 46])
-    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2004/ace2004.yaml", use_rel_na_warmup=5, seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_rel_na_warmup=5, seed=[42, 43, 44, 45, 46])
 
     # Add tests
     runner.add_test(
@@ -47,7 +49,7 @@ def run():
 
 ## Block Configuation
 block_configuation = [
-    "gpu", "tag", "run_id", "seed", "test_from_ckpt", "offline", "use_cache"
+    "gpu", "tag", "run_id", "seed", "test_from_ckpt", "offline", "use_cache", "model_config"
 ]
 
 
