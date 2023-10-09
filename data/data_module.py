@@ -41,12 +41,14 @@ class DataModule(pl.LightningDataModule):
     def __get_dataset(self, mode):
         """根据不同的任务类型以及数据集类型使用不同的数据加载方法"""
         print(utils.green(f"Loading {mode} data..."))
-        if self.config.dataset.name in ["ace2005", "ace2004"]:
+        if self.config.dataset.name in ["ace2005", "ace2004", 'scierc']:
 
             if self.config.dataset.name == "ace2005":
                 filename = self.config.dataset[mode]
             elif self.config.dataset.name == "ace2004":
                 filename = self.config.dataset[mode][self.config.seed % 5]
+            elif self.config.dataset.name == 'scierc':
+                filename = self.config.dataset[mode]
 
             cache_path = filename + ".cache"
             if os.path.exists(cache_path) and self.config.use_cache:

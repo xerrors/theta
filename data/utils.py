@@ -25,7 +25,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     max_len = 0
     max_ner = 0
 
-    debug_metrix = torch.zeros(7, 7, 6)
+    # debug_metrix = torch.zeros(7, 7, 6)
 
     ner2id = {name: idx for idx, name in enumerate(config.dataset.ents)}
     rel2id = {name: idx for idx, name in enumerate(config.dataset.rels)}
@@ -180,7 +180,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 sub_type = ent_type[(sub_s, sub_e)]
                 obj_type = ent_type[(obj_s, obj_e)]
                 triples.add((sub_s, sub_e, obj_s, obj_e, rel2id[rel.label], sub_type, obj_type))
-                debug_metrix[sub_type, obj_type, rel2id[rel.label]] = 1
+                # debug_metrix[sub_type, obj_type, rel2id[rel.label]] = 1
 
             max_tripes_count = config.get("max_tripes_count", 30)
             assert len(triples) <= max_tripes_count, f"triples count {len(triples)} > {max_tripes_count}"
@@ -235,10 +235,17 @@ def get_language_map_dict():
         'OTHER-AFF': 'organization or general affiliation',
         'GPE-AFF': 'geopolitical affiliation',
         'EMP-ORG': 'employment organization',
-        'DISC': 'discourse'
+        'DISC': 'discourse',
+
+        'USED-FOR': 'used for',
+        'FEATURE-OF': 'feature of',
+        'HYPONYM-OF': 'hyponym of',
+        'PART-OF': 'part of',
+        'COMPARE': 'compare',
+        'CONJUNCTION': 'conjunction',
+        'EVALUATE-FOR': 'evaluate for',
     }
 
-    # ['NA', 'FAC', 'WEA', 'LOC', 'VEH', 'GPE', 'ORG', 'PER']
     ace_ent_map = {
         'NA': 'none',
         'FAC': 'entity facility',
@@ -247,7 +254,14 @@ def get_language_map_dict():
         'VEH': 'entity vehicle',
         'GPE': 'entity geopolitical',
         'ORG': 'entity organization',
-        'PER': 'entity person'
+        'PER': 'entity person',
+        
+        'Task': 'task',
+        'Method': 'method',
+        'Metric': 'metric',
+        'Material': 'material',
+        'OtherScientificTerm': 'other scientific term',
+        'Generic': 'generic'
     }
 
     tag_map = {

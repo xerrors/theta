@@ -25,14 +25,14 @@ def run():
     )
 
     # Add arguments
-    runner.add(dataset_config="datasets/ace2004/ace2004.yaml", use_filter_strategy=["1007", "1008"], batch_size=4, seed=[42, 43, 44, 45, 46])
-    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_filter_strategy=["1007", "1008"], batch_size=4, seed=[42, 43, 44, 45, 46])
+    # runner.add(dataset_config="datasets/scierc/scierc.yaml", batch_size=4, use_warmup_rel=0, seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", seed=[42, 43, 44, 45, 46])
 
     # Add tests
     runner.add_test(
         use_thres_val=True,
         test_opt1=["best"],
-        use_thres_threshold=[0.0005, 0.0001, 0.00005],
+        use_thres_threshold=[0.1, 0.05, 0.01, 0.005, 0.001],
         test_from_ckpt=[],
         test_batch_size=1,
         offline=True)
