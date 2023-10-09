@@ -1,7 +1,3 @@
-import torch
-#
-
-
 def getBertForMaskedLMClass(model_config):
     if model_config.model_type == "roberta":
         from transformers import RobertaForMaskedLM
