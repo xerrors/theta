@@ -588,7 +588,8 @@ class REModel(pl.LightningModule):
             new_labels = triple_labels.view(-1)
 
             if self.config.use_rel_na_warmup:
-                self.loss_weight[0] = float(self.config.get("na_rel_weight", 1)) * min(1, (theta.current_epoch + 1) / int(self.config.use_rel_na_warmup))
+                sin_warm = lambda x: np.sin((min(1, x + 0.001) * np.pi / 2))
+                self.loss_weight[0] = float(self.config.get("na_rel_weight", 1)) * sin_warm(theta.current_epoch / int(self.config.use_rel_na_warmup))
 
             if self.config.use_rel_loss_sum:
                 scale_rate = int(self.config.use_rel_loss_sum)
