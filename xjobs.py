@@ -21,20 +21,20 @@ hostname = os.getenv("HOSTNAME", "K")
 def run():
     # Configure Runner
     runner = Runner(
-        name=hostname + "D",
+        name=hostname + "E",
         configuation_index="./configuation_dict.yaml",
         block_configuation=block_configuation,
     )
 
     # Add arguments
-    runner.add(dataset_config="datasets/ace2004/ace2004.yaml", use_rel_na_warmup=5, seed=[42, 43, 44, 45, 46])
-    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_rel_na_warmup=5, seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", seed=[42, 43, 44, 45, 46])
+    # runner.add(dataset_config="datasets/ace2005/ace2005.yaml", na_filter_weight=5, seed=[42, 43, 44, 45, 46])
 
     # Add tests
     runner.add_test(
-        use_thres_val=True,
+        use_test_rel_strict=[True, False],
         test_opt1=["best"],
-        use_thres_threshold=[0.1, 0.05, 0.01, 0.005, 0.001],
+        use_thres_threshold=[0.1, 0.01, 0.001, 0.0005, 0.0001],
         test_from_ckpt=[],
         test_batch_size=1,
         offline=True)
