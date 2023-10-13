@@ -84,6 +84,7 @@ def main(func_mode=False, **kwargs):
         # "best_model_path": model_checkpoint.best_model_path,
         "best_f1": theta.best_f1,
         "test_f1": theta.test_f1,
+        "test_f1*": theta.test_f1_plus,
         "test_p": theta.test_p,
         "test_r": theta.test_r,
         "ner_f1": theta.ner_f1,

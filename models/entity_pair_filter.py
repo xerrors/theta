@@ -66,7 +66,7 @@ class FilterModel(pl.LightningModule):
         self.hard_filter_table = torch.load("datasets/ace2005/ent_rel_corres.data").sum(dim=-1)
         self.dropout = nn.Dropout(dropout_rate)
 
-        self.loss_weight = torch.FloatTensor([1 / self.config.get("na_filter_weight", 1)] + [1] * self.rel_type_num)
+        self.loss_weight = torch.FloatTensor([self.config.get("na_filter_weight", 1)] + [1] * self.rel_type_num)
 
         # metrics
         self.train_metrics = {

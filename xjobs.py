@@ -32,10 +32,9 @@ def run():
 
     # Add tests
     runner.add_test(
-        use_test_rel_strict=[True, False],
         test_opt1=["best"],
-        use_thres_threshold=[0.1, 0.01, 0.001, 0.0005, 0.0001],
-        test_from_ckpt=[],
+        use_thres_threshold=[0.0001],
+        test_from_ckpt=["output/ouput-2023-10-11_17-09-43-KDw-D5-NA_Warm#5-NA_Filt#5","output/ouput-2023-10-11_13-31-56-KDw-D5-NA_Warm#5-NA_Filt#5","output/ouput-2023-10-11_09-54-47-KDw-D5-NA_Warm#5-NA_Filt#5","output/ouput-2023-10-11_06-17-50-KDw-D5-NA_Warm#5-NA_Filt#5","output/ouput-2023-10-11_02-41-29-KDw-D5-NA_Warm#5-NA_Filt#5"],
         test_batch_size=1,
         offline=True)
 

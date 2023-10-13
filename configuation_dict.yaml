@@ -29,7 +29,7 @@ use_filter_opt4: F4
 use_filter_opt5: F5
 use_filter_opt6: F6
 use_thres_val: ThresV
-use_thres_threshold: Thres
+use_thres_threshold: T
 use_thres_gamma: Gamma
 use_filter_loss_sum: Fsum
 use_filter_strategy: Fstgy
@@ -40,6 +40,7 @@ test_opt1: T1
 test_opt2: T2
 test_opt3: T3
 test_opt4: T4
+use_test_rel_strict: Rel+
 # rate
 filter_rate: FR
 rel_rate: RR
@@ -48,3 +49,5 @@ rel_ner_rate: RNR
 
 # test
 use_rel_na_warmup: NA_Warm
+na_filter_weight: NA_Filt
+rel_mlp_with_init: Init

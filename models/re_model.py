@@ -7,6 +7,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from models.components import MultiNonLinearClassifier, SelfAttention
 from models.functions import getPretrainedLMHead
+from xerrors import cprint
 
 
 class REModel(pl.LightningModule):
@@ -31,16 +32,10 @@ class REModel(pl.LightningModule):
             self.classifier = nn.Linear(hidden_size, len(self.rel_ids))
 
         elif config.use_rel == 'mlp':
-            self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids), layers_num=self.config.get("rel_mlp_layer_num", 1))
-
-            # if config.use_rel_tag_cross_attn:
-            #     self.word_embeddings = theta.get_rel_tag_embeddings()
-            #     self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
-            #     self.layer_norm = nn.LayerNorm(hidden_size)
-            #     self.classifier = MultiNonLinearClassifier(hidden_size, len(self.rel_ids))
-            # else:
-            #     self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids))
-
+            self.classifier = MultiNonLinearClassifier(hidden_size * 3,
+                                                       len(self.rel_ids),
+                                                       layers_num=self.config.get("rel_mlp_layer_num", 1),
+                                                       with_init=self.config.rel_mlp_with_init)
         else:
             raise NotImplementedError(f"config.use_rel = {config.use_rel} is not implemented")
 
@@ -127,11 +122,8 @@ class REModel(pl.LightningModule):
         # 暂时使用 calc_num_training_steps 来反复计算，如果后面正式效果可行，再优化这部分的代码
         cur_threshold = -1
         if self.config.use_filter and mode != 'train':
-            if self.config.use_thres_val:
-                assert self.config.use_thres_threshold >= 0, "use_thres_threshold must be >= 0"
-                cur_threshold = self.config.use_thres_threshold
-            elif mode != "predict":
-                cur_threshold = 0.0001  # default validation threshold
+            if mode != "predict":
+                cur_threshold = self.config.get("use_thres_threshold", 0.0001)  # default validation threshold
 
         if mode != "predict":
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
@@ -436,6 +428,14 @@ class REModel(pl.LightningModule):
             # default embed2
             sub_hs = ent_hidden_states[:, 0, :] + sub_tag_hs
             obj_hs = ent_hidden_states[:, 1, :] + obj_tag_hs
+
+            if self.config.use_rel_state_hs:
+                cprint.warning("use_rel_state_hs not implemented")
+                sub_hs = sub_tag_hs
+                obj_hs = obj_tag_hs
+            elif self.config.use_no_hs:
+                sub_hs = sub_tag_hs
+                obj_hs = obj_tag_hs
 
             rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
 

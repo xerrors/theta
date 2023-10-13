@@ -3,7 +3,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 
 class MultiNonLinearClassifier(nn.Module):
-    def __init__(self, hidden_size, tag_size, layers_num=1, hidden_dim=None, dropout_rate=0.1):
+    def __init__(self, hidden_size, tag_size, layers_num=1, hidden_dim=None, dropout_rate=0.1, with_init=False):
         super(MultiNonLinearClassifier, self).__init__()
         self.tag_size = tag_size
         self.activation = nn.ReLU()
@@ -24,12 +24,22 @@ class MultiNonLinearClassifier(nn.Module):
         self.classifier = nn.Linear(hidden_dim, tag_size)
 
         # 参数初始化
-        # for layer in self.layers:
-        #     for name, param in layer.named_parameters():
-        #         if 'weight' in name:
-        #             nn.init.xavier_normal_(param)
-        #         elif 'bias' in name:
-        #             nn.init.constant_(param, 0.0)
+        if with_init:
+            self.init_weights()
+
+    def init_weights(self):
+        for layer in self.layers:
+            for name, param in layer.named_parameters():
+                if 'weight' in name:
+                    nn.init.xavier_normal_(param)
+                elif 'bias' in name:
+                    nn.init.constant_(param, 0.0)
+
+        for name, param in self.classifier.named_parameters():
+            if 'weight' in name:
+                nn.init.xavier_normal_(param)
+            elif 'bias' in name:
+                nn.init.constant_(param, 0.0)
 
     def forward(self, x):
         for layer in self.layers:

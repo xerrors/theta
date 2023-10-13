@@ -1,4 +1,4 @@
-def f1_score(outputs, pred_name, gold_name):
+def f1_score(outputs, pred_name, gold_name, slice=None):
     """计算 F1 分数"""
     pred = 0
     gold = 0
@@ -11,8 +11,14 @@ def f1_score(outputs, pred_name, gold_name):
     # TODO Shit 使用 Set 会导致分数比别人低，有的 Ground Truth 是重复的，实体也是！！！！
 
     for val_out in outputs:
-        pred_triples = set(val_out[pred_name])
-        gold_triples = set(val_out[gold_name])
+
+        if slice is not None:
+            pred_triples = set([t[:slice] for t in val_out[pred_name]])
+            gold_triples = set([t[:slice] for t in val_out[gold_name]])
+        else:
+            pred_triples = set(val_out[pred_name])
+            gold_triples = set(val_out[gold_name])
+
         pred += len(pred_triples)
         gold += len(gold_triples)
         correct += len(set(pred_triples) & set(gold_triples))

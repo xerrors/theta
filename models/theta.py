@@ -49,6 +49,7 @@ class Theta(pl.LightningModule):
         # 模型评估
         self.best_f1 = 0
         self.test_f1 = 0
+        self.test_f1_plus = 0
         # self.eval_fn = partial(f1_score, rel_num=config.dataset.rel_num, na_idx=self.na_idx)
         self.extand_and_init_additional_tokens()
         self.register_components()
@@ -394,9 +395,9 @@ class Theta(pl.LightningModule):
         return self.eval_step_output(batch, output)
 
     def validation_epoch_end(self, outputs):
-        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
+        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples', slice=3)
         ner_f1, ner_p, ner_r = f1_score(outputs, 'pred_entities', 'gold_entities')
-        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples')
+        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples', slice=3)
 
         self.best_f1 = max(f1, self.best_f1)
         self.log_dict_values({'val_f1': f1, 'val/precision': p, 'val/recall': r})
@@ -413,13 +414,18 @@ class Theta(pl.LightningModule):
         return self.eval_step_output(batch, output)
 
     def test_epoch_end(self, outputs):
-        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
+        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples', slice=3)
+        f1_plus, p_plus, r_plus = f1_score(outputs, 'pred_triples', 'gold_triples')
         ner_f1, ner_p, ner_r = f1_score(outputs, 'pred_entities', 'gold_entities')
-        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples')
+        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples', slice=3)
 
+        # returned
         self.test_f1 = f1
         self.test_p = p
         self.test_r = r
+        self.test_f1_plus = f1_plus
+        self.test_p_plus = p_plus
+        self.test_r_plus = r_plus
         self.ner_f1 = ner_f1
         self.ner_p = ner_p
         self.ner_r = ner_r
@@ -429,6 +435,7 @@ class Theta(pl.LightningModule):
         self.log_dict_values({'test/f1': f1, 'test/p': p, 'test/r': r})
         self.log_dict_values({'test/ner_f1': ner_f1, 'test/ner_p': ner_p, 'test/ner_r': ner_r})
         self.log_dict_values({'test/rel_f1': rel_f1, 'test/rel_p': rel_p, 'test/rel_r': rel_r})
+        self.log_dict_values({'test/f1_plus': f1_plus, 'test/p_plus': p_plus, 'test/r_plus': r_plus})
         # self.filter.log_filter_val_metrics()
         # self.rel_model.log_ent_pair_info()
         # self.rel_model.log_filter_rate_val()
@@ -470,10 +477,7 @@ class Theta(pl.LightningModule):
                 sub_type = self.config.dataset.ents[t[5]]
                 obj_type = self.config.dataset.ents[t[6]]
                 triple = (sub_token, obj_token, rel_type, sub_type, obj_type)
-                if self.config.use_rel_strict:
-                    pred_triples.add(triple)
-                else:
-                    pred_triples.add(triple[:3])
+                pred_triples.add(triple)
 
         if pred_only:
             return pred_triples
@@ -490,10 +494,7 @@ class Theta(pl.LightningModule):
                     sub_type = self.config.dataset.ents[t[5]]
                     obj_type = self.config.dataset.ents[t[6]]
                     triple = (sub_token, obj_token, rel_type, sub_type, obj_type)
-                    if self.config.use_rel_strict:
-                        gold_triples.add(triple)
-                    else:
-                        gold_triples.add(triple[:3])
+                    gold_triples.add(triple)
                 else:
                     break
         return pred_triples, gold_triples
