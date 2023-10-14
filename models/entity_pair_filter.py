@@ -1,6 +1,7 @@
 import itertools
 import math
 import random
+import numpy as np
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
@@ -111,7 +112,7 @@ class FilterModel(pl.LightningModule):
                 #     labels[index] = 1
         return labels
 
-    def forward(self, hidden_state, entities, triples=None, mode="train"):
+    def forward(self, hidden_state, entities, triples=None, mode="train", current_epoch=None):
 
         logits = []
         map_dict = {}
@@ -209,11 +210,16 @@ class FilterModel(pl.LightningModule):
             # sub_s, sub_e, obj_s, obj_e, rel_id, sub_type, obj_type
             labels = self.get_filter_label(entities, triples, logits, map_dict)
 
+            if self.config.use_filter_na_warm_up and mode == "train":
+                assert current_epoch is not None, "current_epoch must be not None when use_filter_na_warm_up is True"
+                sin_warm = lambda x: np.sin((min(1, x + 0.001) * np.pi / 2))
+                self.loss_weight[0] = float(self.config.get("na_filter_weight", 1)) * sin_warm(current_epoch / int(self.config.use_filter_na_warm_up))
+
             if self.config.use_filter_loss_sum:
                 scale_rate = int(self.config.use_filter_loss_sum)
                 assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device)) # , label_smoothing=0.1
-                loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16
+                loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 / self.loss_weight.sum() * self.tag_size
             else:
                 loss_fct = nn.CrossEntropyLoss(reduction='mean', weight=self.loss_weight.to(logits.device))
                 loss = loss_fct(logits, labels.long())

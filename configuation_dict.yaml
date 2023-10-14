@@ -48,6 +48,10 @@ ner_rate: NR
 rel_ner_rate: RNR
 
 # test
-use_rel_na_warmup: NA_Warm
-na_filter_weight: NA_Filt
+use_rel_na_warmup: R0Warm
+use_filter_na_warm_up: F0warm
+na_filter_weight: F0w
 rel_mlp_with_init: Init
+
+use_warmup_rel: WarmR
+use_warmup_filter: WarmF

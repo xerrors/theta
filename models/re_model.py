@@ -126,7 +126,7 @@ class REModel(pl.LightningModule):
                 cur_threshold = self.config.get("use_thres_threshold", 0.0001)  # default validation threshold
 
         if mode != "predict":
-            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
+            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode, current_epoch=theta.current_epoch)
             labels = theta.filter.get_filter_label(entities, triples, logits, map_dict)
 
             if mode == "train":
@@ -142,7 +142,7 @@ class REModel(pl.LightningModule):
                     self.statistic[f"val_pred_label_{i}_count"] += (labels == i).sum().item()
                 self.statistic["val_pred_label_count"] += len(labels)
         else:
-            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode)
+            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode, current_epoch=theta.current_epoch)
             labels = None
 
         max_len= 512 #  if mode == "train" else 1024
@@ -200,7 +200,13 @@ class REModel(pl.LightningModule):
                     gold_count = len(gold_draft_ent_groups)
                     gamma = self.config.get("use_thres_gamma", 0.5)
                     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > gamma])
-                    r = theta.filter.train_metrics.get("recall", 0)
+
+                    if self.config.filter_strategy_metric == "f1":
+                        r = theta.filter.train_metrics.get("f1", 0)
+                    elif self.config.filter_strategy_metric == "precision":
+                        r = theta.filter.train_metrics.get("precision", 0)
+                    else:
+                        r = theta.filter.train_metrics.get("recall", 0)
 
                     # 2023-0510
                     strategy = self.config.use_filter_strategy
