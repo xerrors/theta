@@ -40,7 +40,7 @@ class DataModule(pl.LightningDataModule):
 
     def __get_dataset(self, mode):
         """根据不同的任务类型以及数据集类型使用不同的数据加载方法"""
-        print(utils.green(f"Loading {mode} data..."))
+        print(utils.green(f"Loading {mode} data..."), end=" ")
         if self.config.dataset.name in ["ace2005", "ace2004", 'scierc']:
 
             if self.config.dataset.name == "ace2005":

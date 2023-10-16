@@ -12,6 +12,8 @@ import utils
 from data.data_module import DataModule
 from xerrors import cprint
 
+import logging
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
@@ -103,6 +105,9 @@ def main(func_mode=False, **kwargs):
 def configure_logger(config):
     """ TensorBoardLogger (offline) or WandbLogger (Online) """
 
+    logging.getLogger("lightning").setLevel(logging.WARNING)
+    logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
+    logging.getLogger("wandb").setLevel(logging.WARNING)
     logger = pl.loggers.WandbLogger( # type: ignore
         project="Filter",
         name=config.tag,
@@ -110,6 +115,7 @@ def configure_logger(config):
         offline=config.offline,
         reinit=True,
         save_code=True,)
+
     logger.log_hyperparams(config)
     return logger
 

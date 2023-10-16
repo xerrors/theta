@@ -89,9 +89,10 @@ class Config(SimpleConfig):
         if not self.debug:
             dir_name = self.output_dir.split(os.sep)[-1]
             try:
-                os.symlink(f"{dir_name}", link, target_is_directory=True)
-            except:
                 os.remove(link)
+            except:
+                pass
+            finally:
                 os.symlink(f"{dir_name}", link, target_is_directory=True)
 
     def parse_config(self, config_file, config_type):

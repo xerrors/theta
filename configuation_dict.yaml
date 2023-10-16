@@ -21,6 +21,7 @@ use_rel_opt3: R3
 use_rel_opt4: R4
 use_rel_ner: RN
 use_rel_loss_sum: Rsum
+use_rel_attn: RAttn
 rel_mlp_layer_num: RelMLP
 # use filter
 use_filter_opt1: F1
