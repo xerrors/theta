@@ -5,6 +5,7 @@ ner_lr: NLR
 rel_lr: RLR
 batch_size: BS
 test_batch_size: TBS
+global_batch_size: GBS
 max_seq_len: MaxLen
 optimizer: Opt
 # use ner
@@ -21,6 +22,7 @@ use_rel_opt3: R3
 use_rel_opt4: R4
 use_rel_ner: RN
 use_rel_loss_sum: Rsum
+use_rel_attn: RAttn
 rel_mlp_layer_num: RelMLP
 # use filter
 use_filter_opt1: F1
@@ -48,6 +50,16 @@ ner_rate: NR
 rel_ner_rate: RNR
 
 # test
-use_rel_na_warmup: NA_Warm
-na_filter_weight: NA_Filt
+use_rel_na_warmup: R0Warm
+use_filter_na_warm_up: F0warm
+na_filter_weight: F0w
 rel_mlp_with_init: Init
+
+use_warmup_rel: WarmR
+use_warmup_filter: WarmF
+
+use_filter_focal_loss: FocalF
+use_rel_focal_loss: FocalR
+use_ner_focal_loss: FocalE
+
+use_pair_sort_fix: SortFix

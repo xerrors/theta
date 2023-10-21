@@ -10,6 +10,8 @@ from models.functions import getPretrainedLMHead
 
 from transformers.models.bert.modeling_bert import BertAttention, BertOutput, BertIntermediate
 
+# from utils.Focal_Loss import focal_loss
+
 class EntAttentionLayer(nn.Module):
 
     def __init__(self, config, word_embeddings, ent_ids):
@@ -188,6 +190,10 @@ class NERModel(pl.LightningModule):
             #     new_labels = labels.view(-1).long()[mask.view(-1) > 0]
 
             #     loss = loss_fct(new_logits, new_labels)
+            # if self.config.use_ner_focal_loss:
+            #     loss_fct = focal_loss(num_classes=self.ent_tags_count)
+            # else:
+            #     loss_fct = nn.CrossEntropyLoss(reduction="mean", weight=self.loss_weight.cuda())
 
             loss_fct = nn.CrossEntropyLoss(reduction="mean", weight=self.loss_weight.cuda())
             new_logits = logits.view(-1, self.ent_tags_count)[mask.view(-1) > 0]

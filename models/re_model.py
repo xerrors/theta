@@ -7,7 +7,52 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from models.components import MultiNonLinearClassifier, SelfAttention
 from models.functions import getPretrainedLMHead
-from xerrors import cprint
+# from utils.Focal_Loss import focal_loss
+# from xerrors import cprint
+
+# from transformers.models.bert.modeling_bert import BertAttention, BertOutput, BertIntermediate
+
+
+# class RelAttnLayer(nn.Module):
+
+#     def __init__(self, config):
+#         super().__init__()
+#         self.config = config
+#         self.attention = BertAttention(config=self.config.model)
+#         self.crossattention = BertAttention(config=self.config.model)
+#         self.intermediate = BertIntermediate(config=self.config.model)
+#         self.output = BertOutput(config=self.config.model)
+
+#     def forward(self, hidden_states, attention_mask, encoder_hidden_states, encoder_attention_mask=None):
+
+#         if encoder_attention_mask is not None:
+#             encoder_attention_mask = encoder_attention_mask.unsqueeze(1).unsqueeze(1)
+
+#         hidden_states = self.attention(hidden_states, attention_mask.unsqueeze(1))[0] # for head
+#         hidden_states = self.crossattention(hidden_states=hidden_states,
+#                                             encoder_hidden_states=encoder_hidden_states,
+#                                             encoder_attention_mask=encoder_attention_mask)[0]
+
+#         intermediate_output = self.intermediate(hidden_states)
+#         hidden_states = self.output(intermediate_output, hidden_states)
+
+#         return hidden_states
+
+# class RelAttnModel(nn.Module):
+
+#     def __init__(self, config) -> None:
+#         super().__init__()
+#         self.config = config
+#         self.layers = nn.ModuleList([
+#             RelAttnLayer(self.config)
+#             for _ in range(config.get("rel_attn_layer_num", 1))])
+
+#     def forward(self, hidden_states, attention_mask, encoder_hidden_states, encoder_attention_mask=None):
+
+#         for layer in self.layers:
+#             hidden_states = layer(hidden_states, attention_mask, encoder_hidden_states, encoder_attention_mask)
+
+#         return hidden_states
 
 
 class REModel(pl.LightningModule):
@@ -39,6 +84,9 @@ class REModel(pl.LightningModule):
         else:
             raise NotImplementedError(f"config.use_rel = {config.use_rel} is not implemented")
 
+
+        # if self.config.use_rel_attn:
+        #     self.rel_attn_model = RelAttnModel(config)
 
         self.downscale = nn.Linear(hidden_size * 3, hidden_size, bias=False)
 
@@ -126,7 +174,7 @@ class REModel(pl.LightningModule):
                 cur_threshold = self.config.get("use_thres_threshold", 0.0001)  # default validation threshold
 
         if mode != "predict":
-            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode)
+            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode, current_epoch=theta.current_epoch)
             labels = theta.filter.get_filter_label(entities, triples, logits, map_dict)
 
             if mode == "train":
@@ -142,7 +190,7 @@ class REModel(pl.LightningModule):
                     self.statistic[f"val_pred_label_{i}_count"] += (labels == i).sum().item()
                 self.statistic["val_pred_label_count"] += len(labels)
         else:
-            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode)
+            logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode, current_epoch=theta.current_epoch)
             labels = None
 
         max_len= 512 #  if mode == "train" else 1024
@@ -201,6 +249,10 @@ class REModel(pl.LightningModule):
                     gamma = self.config.get("use_thres_gamma", 0.5)
                     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > gamma])
                     r = theta.filter.train_metrics.get("recall", 0)
+                    # if self.config.filter_strategy_metric == "f1":
+                    #     r = theta.filter.train_metrics.get("f1", 0)
+                    # elif self.config.filter_strategy_metric == "precision":
+                    #     r = theta.filter.train_metrics.get("precision", 0)
 
                     # 2023-0510
                     strategy = self.config.use_filter_strategy
@@ -214,6 +266,13 @@ class REModel(pl.LightningModule):
                         count = max(int(np.ceil(ent_count * (1 - r / 2))), int(gold_count - gold_count * r + pred_count * r))
                     elif strategy == "1008":
                         count = max(0, int(gold_count - gold_count * r + pred_count * r * 2))
+                    # elif strategy == "1017":
+                    #     val_threshold = self.config.get("use_thres_threshold", 0.0001)
+                    #     val_pos_count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
+                    #     count = max(val_pos_count, int(gold_count - gold_count * r + pred_count * r * 2))
+                    # elif strategy == "1019":
+                    #     val_threshold = self.config.get("use_thres_threshold", 0.0001)
+                    #     count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
                     else:
                         count = max(ent_count, int(gold_count - gold_count * r + pred_count * r))
 
@@ -241,6 +300,10 @@ class REModel(pl.LightningModule):
                 sub_s, sub_e, sub_t = ent_pair[0][:3]
                 obj_s, obj_e, obj_t = ent_pair[1][:3]
                 score = ent_pair[2]
+
+                # if mode == "test" and len(ids) + 5 > max_len:
+                #     max_len = len(ids) + 5
+                #     print(f"实体对过多{len(ids)}, 超过最大长度{max_len}，已经扩展")
 
                 if len(ids) + 5 <= max_len and score > cur_threshold:  # 当设置 filter_rate 为 0 时，仅包含正确的实体对
                     marker_mask += 1
@@ -406,6 +469,48 @@ class REModel(pl.LightningModule):
                         output_hidden_states=True)
             rel_stage_hs = outputs.hidden_states[-1]
 
+            # attention
+            sent_mask = torch.where(rel_attention_mask_pad == 1, 1.0, 0.0).to(device)
+            # if self.config.use_rel_attn:
+            #     max_sent_len = (rel_attention_mask_pad == 1).sum(dim=-1).max().item()
+            #     sent_mask_attn = sent_mask[:, :max_sent_len]
+            #     rel_sent_hs = rel_stage_hs * (rel_attention_mask_pad == 1).unsqueeze(-1).to(device)
+            #     rel_sent_hs = rel_sent_hs[:, :max_sent_len, :]
+
+            #     rel_triplet_hs = []
+            #     rel_triplet_mask = []
+            #     for bi in range(bsz):
+            #         rel_triplet_mask.append(rel_attention_mask_pad[bi, rel_attention_mask_pad[bi] > 1])
+            #         rel_triplet_hs.append(rel_stage_hs[bi, rel_attention_mask_pad[bi] > 1])
+
+            #     rel_triplet_hs = nn.utils.rnn.pad_sequence(rel_triplet_hs, batch_first=True, padding_value=0)
+            #     rel_triplet_mask = nn.utils.rnn.pad_sequence(rel_triplet_mask, batch_first=True, padding_value=0)
+
+            #     mask_2d = rel_triplet_mask.unsqueeze(-1) * rel_triplet_mask.unsqueeze(-2)
+            #     mask_mask = (rel_triplet_mask ** 2).unsqueeze(1)
+            #     mask_2d_pos = (mask_2d > 0)
+            #     rel_triplet_mask_2d = torch.where(mask_2d == mask_mask, 1.0, 0.0)
+            #     rel_triplet_mask_2d = (rel_triplet_mask_2d * mask_2d_pos.float()).to(device)
+
+            #     rel_triplet_hs = self.rel_attn_model(hidden_states=rel_triplet_hs,
+            #                                         attention_mask=rel_triplet_mask_2d,
+            #                                         encoder_hidden_states=rel_sent_hs,
+            #                                         encoder_attention_mask=sent_mask_attn)
+
+
+            #     mask_pos = torch.where(rel_triplet_mask > 0)
+            #     hs = rel_triplet_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
+            #     rel_hidden_states = hs[::3]
+            #     sub_tag_hs = hs[1::3]
+            #     obj_tag_hs = hs[2::3]
+
+            # else:
+            #     # 找到 mask 的 Hidden State
+            #     mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
+            #     rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
+
+            #     sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+            #     obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
             # 找到 mask 的 Hidden State
             mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
             rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
@@ -425,17 +530,40 @@ class REModel(pl.LightningModule):
                 sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
                 obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
 
+            # sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+            # obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
+
+
+            # if self.config.use_rel_ner:
+            #     sent_hs = rel_stage_hs
+            #     sent_labels = bio_tags - theta.ent_ids[0]
+            #     if self.config.use_rel_ner == "no_mask":
+            #         sent_mask = torch.where(rel_attention_mask_pad > 0, 1.0, 0.0).to(device)
+            #     # elif self.config.use_rel_ner == "attn":
+            #     #     sent_hs = rel_sent_hs
+            #     #     sent_mask = sent_mask_attn
+            #     #     sent_labels = sent_labels[:, :max_sent_len]
+
+            #     logits, sent_ner_loss = theta.ner_model(sent_hs, labels=sent_labels, mask=sent_mask)
+
+
+            # if self.config.use_rel_state_hs:
+            #     sub_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+1]
+            #     obj_pos_ids = rel_positional_ids[mask_pos[0], mask_pos[1]+2]
+            #     sub_rel_hs = rel_stage_hs[mask_pos[0], sub_pos_ids]
+            #     obj_rel_hs = rel_stage_hs[mask_pos[0], obj_pos_ids]
+            #     sub_hs = sub_rel_hs + sub_tag_hs
+            #     obj_hs = obj_rel_hs + obj_tag_hs
+            # else:
+            #     sub_ent_hs = ent_hidden_states[:, 0, :]
+            #     obj_ent_hs = ent_hidden_states[:, 1, :]
+            #     sub_hs = sub_ent_hs + sub_tag_hs
+            #     obj_hs = obj_ent_hs + obj_tag_hs
+
+
             # default embed2
             sub_hs = ent_hidden_states[:, 0, :] + sub_tag_hs
             obj_hs = ent_hidden_states[:, 1, :] + obj_tag_hs
-
-            if self.config.use_rel_state_hs:
-                cprint.warning("use_rel_state_hs not implemented")
-                sub_hs = sub_tag_hs
-                obj_hs = obj_tag_hs
-            elif self.config.use_no_hs:
-                sub_hs = sub_tag_hs
-                obj_hs = obj_tag_hs
 
             rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
 
@@ -590,6 +718,10 @@ class REModel(pl.LightningModule):
             if self.config.use_rel_na_warmup:
                 sin_warm = lambda x: np.sin((min(1, x + 0.001) * np.pi / 2))
                 self.loss_weight[0] = float(self.config.get("na_rel_weight", 1)) * sin_warm(theta.current_epoch / int(self.config.use_rel_na_warmup))
+
+            # if self.config.use_rel_focal_loss:
+            #     loss_fct = focal_loss(alpha=None, gamma=2, num_classes=len(self.rel_ids))
+            #     rel_loss = loss_fct(new_logits, new_labels)
 
             if self.config.use_rel_loss_sum:
                 scale_rate = int(self.config.use_rel_loss_sum)

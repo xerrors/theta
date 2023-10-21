@@ -42,7 +42,7 @@ use_two_plm: False
 use_cache: True
 
 use_warmup_filter: 20
-use_warmup_rel: 10
+use_warmup_rel: 5
 
 use_bio_embed: True
 # use_ent_pred_rel: "embed2" # for compatibility
