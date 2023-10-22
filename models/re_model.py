@@ -7,7 +7,7 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from models.components import MultiNonLinearClassifier, SelfAttention
 from models.functions import getPretrainedLMHead
-# from utils.Focal_Loss import focal_loss
+from utils.Focal_Loss import focal_loss
 # from xerrors import cprint
 
 # from transformers.models.bert.modeling_bert import BertAttention, BertOutput, BertIntermediate
@@ -168,6 +168,10 @@ class REModel(pl.LightningModule):
         # 如果启用 use_thres_train，则训练阶段实际上是使用的是所有的有关系的实体对
         # 如果启用 use_thres_val，则验证阶段使用的都是置信度高的实体对
         # 暂时使用 calc_num_training_steps 来反复计算，如果后面正式效果可行，再优化这部分的代码
+
+        if self.config.use_filter_focal_loss and mode != "test":
+            self.config.use_thres_threshold = 0.1
+
         cur_threshold = -1
         if self.config.use_filter and mode != 'train':
             if mode != "predict":
@@ -266,13 +270,13 @@ class REModel(pl.LightningModule):
                         count = max(int(np.ceil(ent_count * (1 - r / 2))), int(gold_count - gold_count * r + pred_count * r))
                     elif strategy == "1008":
                         count = max(0, int(gold_count - gold_count * r + pred_count * r * 2))
-                    # elif strategy == "1017":
-                    #     val_threshold = self.config.get("use_thres_threshold", 0.0001)
-                    #     val_pos_count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
-                    #     count = max(val_pos_count, int(gold_count - gold_count * r + pred_count * r * 2))
-                    # elif strategy == "1019":
-                    #     val_threshold = self.config.get("use_thres_threshold", 0.0001)
-                    #     count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
+                    elif strategy == "1017":
+                        val_threshold = self.config.get("use_thres_threshold", 0.0001)
+                        val_pos_count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
+                        count = max(val_pos_count, int(gold_count - gold_count * r + pred_count * r * 2))
+                    elif strategy == "1019":
+                        val_threshold = self.config.get("use_thres_threshold", 0.0001)
+                        count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
                     else:
                         count = max(ent_count, int(gold_count - gold_count * r + pred_count * r))
 
@@ -301,9 +305,9 @@ class REModel(pl.LightningModule):
                 obj_s, obj_e, obj_t = ent_pair[1][:3]
                 score = ent_pair[2]
 
-                # if mode == "test" and len(ids) + 5 > max_len:
-                #     max_len = len(ids) + 5
-                #     print(f"实体对过多{len(ids)}, 超过最大长度{max_len}，已经扩展")
+                if mode == "test" and len(ids) + 5 > max_len:
+                    max_len = len(ids) + 5
+                    print(f"实体对过多{len(ids)}, 超过最大长度{max_len}，已经扩展")
 
                 if len(ids) + 5 <= max_len and score > cur_threshold:  # 当设置 filter_rate 为 0 时，仅包含正确的实体对
                     marker_mask += 1
@@ -719,11 +723,11 @@ class REModel(pl.LightningModule):
                 sin_warm = lambda x: np.sin((min(1, x + 0.001) * np.pi / 2))
                 self.loss_weight[0] = float(self.config.get("na_rel_weight", 1)) * sin_warm(theta.current_epoch / int(self.config.use_rel_na_warmup))
 
-            # if self.config.use_rel_focal_loss:
-            #     loss_fct = focal_loss(alpha=None, gamma=2, num_classes=len(self.rel_ids))
-            #     rel_loss = loss_fct(new_logits, new_labels)
+            if self.config.use_rel_focal_loss:
+                loss_fct = focal_loss(alpha=None, gamma=2, num_classes=len(self.rel_ids))
+                rel_loss = loss_fct(new_logits, new_labels)
 
-            if self.config.use_rel_loss_sum:
+            elif self.config.use_rel_loss_sum:
                 scale_rate = int(self.config.use_rel_loss_sum)
                 assert scale_rate > 0, "use_rel_loss_sum 参数错误"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device))

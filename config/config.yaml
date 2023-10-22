@@ -60,6 +60,7 @@ filter_rate: 1
 rel_ner_rate: 0.1
 
 # Filter
+filter_dropout_rate: 0.1
 use_rel_opt1: "obj"
 use_rel_opt2: "mean"
 use_filter_hard: False

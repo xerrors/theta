@@ -11,7 +11,7 @@ from xerrors import debug
 from models.components import MultiNonLinearClassifier, SelfAttention
 from sklearn.metrics import f1_score, precision_score, recall_score
 
-# from utils.Focal_Loss import focal_loss
+from utils.Focal_Loss import focal_loss
 
 
 class FilterModel(pl.LightningModule):
@@ -28,7 +28,7 @@ class FilterModel(pl.LightningModule):
         self.labels_val = None
         hidden_size = self.config.model.hidden_size
 
-        dropout_rate = 0.1
+        dropout_rate = self.config.filter_dropout_rate # 0.1 default
 
         # attention_out_dim = int(self.config.model.hidden_size * float(self.config.get("use_filter_opt4", 1.0)))
         self.tag_size = len(self.config.dataset.rels) + 1 if self.config.use_filter_opt1 == "concat_pro" else 1
@@ -67,7 +67,7 @@ class FilterModel(pl.LightningModule):
             tag_size=self.tag_size)
 
         self.hard_filter_table = torch.load("datasets/ace2005/ent_rel_corres.data").sum(dim=-1)
-        self.dropout = nn.Dropout(dropout_rate)
+        self.dropout_hidden_state = nn.Dropout(0.1)
 
         self.loss_weight = torch.FloatTensor([self.config.get("na_filter_weight", 1)] + [1] * self.rel_type_num)
 
@@ -119,7 +119,7 @@ class FilterModel(pl.LightningModule):
         logits = []
         map_dict = {}
 
-        hidden_state = self.dropout(hidden_state)
+        hidden_state = self.dropout_hidden_state(hidden_state)
 
         for i in range(len(entities)):
             if len(entities[i]) == 0: continue
@@ -217,15 +217,15 @@ class FilterModel(pl.LightningModule):
             #     sin_warm = lambda x: np.sin((min(1, x + 0.001) * np.pi / 2))
             #     self.loss_weight[0] = float(self.config.get("na_filter_weight", 1)) * sin_warm(current_epoch / int(self.config.use_filter_na_warm_up))
 
-            # if self.config.use_filter_focal_loss:
-            #     if self.config.use_filter_focal_loss == "sum": # TODO: temp
-            #         scale_rate = int(self.config.use_filter_loss_sum)
-            #         assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
-            #         loss_fct = focal_loss(alpha=None, gamma=2, num_classes=self.tag_size, size_average=False)
-            #         loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 / self.loss_weight.sum() * self.tag_size
-            #     else:
-            #         loss_fct = focal_loss(alpha=None, gamma=2, num_classes=self.tag_size, size_average=True)
-            #         loss = loss_fct(logits, labels.long())
+            if self.config.use_filter_focal_loss:
+                if self.config.use_filter_focal_loss == "sum": # TODO: temp
+                    scale_rate = int(self.config.use_filter_loss_sum)
+                    assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
+                    loss_fct = focal_loss(alpha=None, gamma=2, num_classes=self.tag_size, size_average=False)
+                    loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 / self.loss_weight.sum() * self.tag_size
+                else:
+                    loss_fct = focal_loss(alpha=None, gamma=2, num_classes=self.tag_size, size_average=True)
+                    loss = loss_fct(logits, labels.long())
 
             if self.config.use_filter_loss_sum:
                 scale_rate = int(self.config.use_filter_loss_sum)

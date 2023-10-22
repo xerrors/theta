@@ -35,6 +35,7 @@ use_thres_threshold: T
 use_thres_gamma: Gamma
 use_filter_loss_sum: Fsum
 use_filter_strategy: Fstgy
+filter_dropout_rate: Fdrop
 # Task
 context_window: CW
 # Test

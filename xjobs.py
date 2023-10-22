@@ -33,8 +33,12 @@ def run():
     )
 
     # Add arguments
-    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", seed=[42, 43, 44, 45, 46])
-    # runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_warmup_rel=5, use_rel_focal_loss=True, gpu=0, seed=[46])
+    # runner.add(dataset_config="datasets/ace2005/ace2005.yaml", seed=[42])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_rel_focal_loss=True, gpu=1, seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_pair_sort_fix=True, gpu=1, seed=[42, 43, 44, 45, 46])
+    # runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_filter_focal_loss="sum", gpu=0, seed=[42, 43, 44, 45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_filter_focal_loss=True, gpu=0, seed=[45, 46])
+    runner.add(dataset_config="datasets/ace2005/ace2005.yaml", filter_dropout_rate=0.5, gpu=0, seed=[45, 46])
     # runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_warmup_rel=0, use_rel_focal_loss=True, use_pair_sort_fix=[True, False], gpu=0, seed=[42, 43, 44, 45, 46])
 
     # runner.add(dataset_config="datasets/ace2005/ace2005.yaml", use_warmup_rel=5, use_ner_focal_loss=True, gpu=1, seed=[44, 45, 46])
@@ -45,8 +49,8 @@ def run():
     # Add tests
     runner.add_test(
         test_opt1=["best"],
-        use_thres_threshold=[0.4, 0.3, 0.2],
-        test_from_ckpt=["output/ouput-2023-10-20_05-52-43-KE-D5-WarmR#5-FocalF","output/ouput-2023-10-20_02-01-01-KE-D5-WarmR#5-FocalF","output/ouput-2023-10-19_22-11-02-KE-D5-WarmR#5-FocalF"],
+        use_thres_threshold=[0.005, 0.001],
+        test_from_ckpt=["output/ouput-2023-10-22_16-25-46-KF-D5-FocalF","output/ouput-2023-10-22_12-40-41-KF-D5-FocalF","output/ouput-2023-10-22_10-30-45-KF-D5-FocalF","output/ouput-2023-10-22_06-45-09-KF-D5-FocalF","output/ouput-2023-10-22_01-06-29-KF-D5-FocalF"],
         test_batch_size=1,
         offline=True)
 
