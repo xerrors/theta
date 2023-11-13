@@ -14,12 +14,15 @@ def get_optimizer(theta, config):
         config (Config): config
     """
 
-    model_lr = config.get("model_lr", config.lr)  # default model_lr = lr
-    task_lr = config.get("task_lr", config.lr)
+    model_lr = config.get("model_lr", config.lr)
+    # task_lr = config.get("task_lr", config.lr)
     decoder_lr = config.get("decoder_lr", config.lr)
-    filter_lr = config.get("filter_lr", task_lr)
-    ner_lr = config.get("ner_lr", task_lr)
-    rel_lr = config.get("rel_lr", task_lr)
+    # filter_lr = config.get("filter_lr", task_lr)
+    # ner_lr = config.get("ner_lr", task_lr)
+    # rel_lr = config.get("rel_lr", task_lr)
+    filter_lr = config.lr * config.filter_lr
+    ner_lr = config.lr * config.ner_lr
+    rel_lr = config.lr * config.rel_lr
 
     added_list = []
     optimizer_group_parameters = []
@@ -29,9 +32,9 @@ def get_optimizer(theta, config):
     optimizer_group_parameters.extend(get_params(theta, name="filter", lr=filter_lr))
     added_list.append("filter")
 
-    if config.use_span_ner:
-        optimizer_group_parameters.extend(get_params(theta, name="span_ner", lr=task_lr))
-        added_list.append("span_ner")
+    # if config.use_span_ner:
+    #     optimizer_group_parameters.extend(get_params(theta, name="span_ner", lr=task_lr))
+    #     added_list.append("span_ner")
 
     if config.use_ner != "lmhead":
         optimizer_group_parameters.extend(get_params(theta, name="ner_model", lr=ner_lr))

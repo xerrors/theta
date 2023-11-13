@@ -10,9 +10,9 @@ num_worker: 12
 batch_size: 16 # can be overrided by model.yaml
 test_batch_size: 1
 lr: 0.00005
-task_lr: 0.0005
-ner_lr: 0.0005
-rel_lr: 0.00005
+filter_lr: 10 # NOTE: it is a multiplier of lr, the final filter_lr = lr * filter_lr
+ner_lr: 10 # NOTE: it is a multiplier of lr, the final ner_lr = lr * ner_lr
+rel_lr: 1 # NOTE: it is a multiplier of lr, the final rel_lr = lr * rel_lr
 # decoder_lr: 0.00003
 # Achieved by gradient accumulation
 # accumulate_grad_batches will be set as global_batch_size // batch_size
@@ -49,6 +49,8 @@ use_bio_embed: True
 use_rel_opt3: "embed2"
 use_filter_opt1: "concat_pro"
 use_filter_opt5: "u1"
+rel_mlp_layer_num: 1
+# rel_attn_layer_num: 1
 
 # Graph
 use_graph_layers: 0
@@ -57,7 +59,7 @@ use_graph_layers: 0
 ner_rate: 1
 rel_rate: 1
 filter_rate: 1
-rel_ner_rate: 0.1
+rel_ner_rate: 0.01
 
 # Filter
 filter_dropout_rate: 0.1
@@ -79,8 +81,9 @@ use_spert: False # defeat
 # use_crf: False # 目前效果不太行
 # use_dynamic_rel_threshold: True
 use_thres_threshold: 0.0001
-ent_attn_layer_num: 1
+ent_attn_layer_num: 3
 ent_mlp_layer_num: 2
+use_ner_layer_loss: "bio"
 
 # lota
 use_ent_tag_cross_attn: True
@@ -89,8 +92,10 @@ use_loss_fix: True
 
 # set
 use_ent_attn: True
-ent_attn_range: 10
+ent_attn_range: 20
 use_thres_train: True
 
 use_test_for_val: True
 use_rel_na_warmup: 5
+use_filter_focal_loss: "sum"
+use_rel_refine: True

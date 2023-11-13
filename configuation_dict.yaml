@@ -3,6 +3,7 @@ max_epochs: E
 lr: LR
 ner_lr: NLR
 rel_lr: RLR
+filter_lr: FLR
 batch_size: BS
 test_batch_size: TBS
 global_batch_size: GBS
@@ -14,6 +15,7 @@ ent_attn_layer_num: AttnL
 ent_mlp_layer_num: MLPL
 use_ent_bio_input: BioIn
 ent_attn_range: AttnR
+use_ner_layer_loss: NLLa
 # use rel
 use_rel: REL
 use_rel_opt1: R1
@@ -22,7 +24,7 @@ use_rel_opt3: R3
 use_rel_opt4: R4
 use_rel_ner: RN
 use_rel_loss_sum: Rsum
-use_rel_attn: RAttn
+use_rel_attn: RAttns
 rel_mlp_layer_num: RelMLP
 # use filter
 use_filter_opt1: F1
@@ -64,3 +66,7 @@ use_rel_focal_loss: FocalR
 use_ner_focal_loss: FocalE
 
 use_pair_sort_fix: SortFix
+
+use_filter_tag: FTag
+use_negative: Neg
+use_length_embedding: LenEmb

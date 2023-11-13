@@ -46,7 +46,9 @@ class DataModule(pl.LightningDataModule):
             if self.config.dataset.name == "ace2005":
                 filename = self.config.dataset[mode]
             elif self.config.dataset.name == "ace2004":
-                filename = self.config.dataset[mode][self.config.seed % 5]
+                piece = self.config.data_piece or 0
+                assert piece in [0, 1, 2, 3, 4], "data_piece must be in [0, 1, 2, 3, 4]"
+                filename = self.config.dataset[mode][piece]
             elif self.config.dataset.name == 'scierc':
                 filename = self.config.dataset[mode]
 
@@ -126,7 +128,10 @@ class DataModule(pl.LightningDataModule):
         return DataLoader(self.data_train, shuffle=True, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
 
     def val_dataloader(self):
-        return DataLoader(self.data_val, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
+        if self.config.use_val_same_as_test:
+            return DataLoader(self.data_val, shuffle=False, batch_size=self.config.test_batch_size, num_workers=self.config.num_worker, pin_memory=True)
+        else:
+            return DataLoader(self.data_val, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
 
     def test_dataloader(self):
         return DataLoader(self.data_test, shuffle=False, batch_size=self.config.test_batch_size, num_workers=self.config.num_worker, pin_memory=False) # type: ignore

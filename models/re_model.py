@@ -10,33 +10,33 @@ from models.functions import getPretrainedLMHead
 from utils.Focal_Loss import focal_loss
 # from xerrors import cprint
 
-# from transformers.models.bert.modeling_bert import BertAttention, BertOutput, BertIntermediate
+from transformers.models.bert.modeling_bert import BertAttention, BertOutput, BertIntermediate
 
 
-# class RelAttnLayer(nn.Module):
+class RelAttnLayer(nn.Module):
 
-#     def __init__(self, config):
-#         super().__init__()
-#         self.config = config
-#         self.attention = BertAttention(config=self.config.model)
-#         self.crossattention = BertAttention(config=self.config.model)
-#         self.intermediate = BertIntermediate(config=self.config.model)
-#         self.output = BertOutput(config=self.config.model)
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.attention = BertAttention(config=self.config.model)
+        self.crossattention = BertAttention(config=self.config.model)
+        self.intermediate = BertIntermediate(config=self.config.model)
+        self.output = BertOutput(config=self.config.model)
 
-#     def forward(self, hidden_states, attention_mask, encoder_hidden_states, encoder_attention_mask=None):
+    def forward(self, hidden_states, attention_mask, encoder_hidden_states, encoder_attention_mask=None):
 
-#         if encoder_attention_mask is not None:
-#             encoder_attention_mask = encoder_attention_mask.unsqueeze(1).unsqueeze(1)
+        if encoder_attention_mask is not None:
+            encoder_attention_mask = encoder_attention_mask.unsqueeze(1).unsqueeze(1)
 
-#         hidden_states = self.attention(hidden_states, attention_mask.unsqueeze(1))[0] # for head
-#         hidden_states = self.crossattention(hidden_states=hidden_states,
-#                                             encoder_hidden_states=encoder_hidden_states,
-#                                             encoder_attention_mask=encoder_attention_mask)[0]
+        # hidden_states = self.attention(hidden_states, attention_mask.unsqueeze(1))[0] # for head
+        hidden_states = self.crossattention(hidden_states=hidden_states,
+                                            encoder_hidden_states=encoder_hidden_states,
+                                            encoder_attention_mask=encoder_attention_mask)[0]
 
-#         intermediate_output = self.intermediate(hidden_states)
-#         hidden_states = self.output(intermediate_output, hidden_states)
+        intermediate_output = self.intermediate(hidden_states)
+        hidden_states = self.output(intermediate_output, hidden_states)
 
-#         return hidden_states
+        return hidden_states
 
 # class RelAttnModel(nn.Module):
 
@@ -54,6 +54,33 @@ from utils.Focal_Loss import focal_loss
 
 #         return hidden_states
 
+class RelDecoder(nn.Module):
+
+    def __init__(self, theta):
+        super().__init__()
+        self.config = theta.config
+
+
+        self.rel_ids = theta.rel_ids
+        self.ent_ids = theta.ent_ids
+        self.tag_size = len(self.rel_ids)
+
+        self.attn = nn.ModuleList([RelAttnLayer(self.config) for _ in range(self.config.ent_attn_layer_num)])
+
+    def forward(self, hidden_states, attention_mask, encoder_hidden_states, encoder_attention_mask=None):
+
+        if isinstance(encoder_hidden_states, list):
+            encoder_hidden_states = encoder_hidden_states[1:]
+        else:
+            encoder_hidden_states = [encoder_hidden_states] * len(self.attn)
+        assert len(self.attn) == len(encoder_hidden_states), "encoder_hidden_states 长度不对"
+
+        out = [hidden_states]
+        for li, layer in enumerate(self.attn):
+            hidden_states = layer(hidden_states, attention_mask, encoder_hidden_states[li], encoder_attention_mask)
+            out.append(hidden_states)
+
+        return out
 
 class REModel(pl.LightningModule):
 
@@ -67,28 +94,13 @@ class REModel(pl.LightningModule):
         config = self.config
         hidden_size = config.model.hidden_size
 
-        if config.use_rel == 'lmhead':
-            if config.use_two_plm:
-                self.lmhead = getPretrainedLMHead(theta.plm_model_for_re, config.model)
-            else:
-                self.lmhead = getPretrainedLMHead(theta.plm_model, config.model)
+        self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids), layers_num=self.config.rel_mlp_layer_num)
 
-        elif config.use_rel == 'linear':
-            self.classifier = nn.Linear(hidden_size, len(self.rel_ids))
+        if self.config.use_rel_attn:
+            self.decoder = RelDecoder(theta)
 
-        elif config.use_rel == 'mlp':
-            self.classifier = MultiNonLinearClassifier(hidden_size * 3,
-                                                       len(self.rel_ids),
-                                                       layers_num=self.config.get("rel_mlp_layer_num", 1),
-                                                       with_init=self.config.rel_mlp_with_init)
-        else:
-            raise NotImplementedError(f"config.use_rel = {config.use_rel} is not implemented")
-
-
-        # if self.config.use_rel_attn:
-        #     self.rel_attn_model = RelAttnModel(config)
-
-        self.downscale = nn.Linear(hidden_size * 3, hidden_size, bias=False)
+        if self.config.use_length_embedding:
+            self.length_embedding = theta.length_embedding
 
         self.grt_count = 0
         self.hit_count = 0
@@ -216,10 +228,6 @@ class REModel(pl.LightningModule):
         for entity in entities:
             ent_num += len(entity)
 
-        # # 训练的时候使用真实标签来训练，测试的时候使用预测标签来训练
-        # if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
-        #     logits = labels
-
         for b, entity in enumerate(entities):
 
             if pos is not None:
@@ -241,15 +249,14 @@ class REModel(pl.LightningModule):
 
             bio_ids = bio_ids.tolist()
 
-            # 先构建一个初始的实体组，然后按照置信度排序，能排多少是多少
             if mode != "predict":
                 pred_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
-                gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode, pred=logits if self.config.use_thres_plus else None)
+                gold_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, labels, mode, pred=logits)
 
                 count = len(gold_draft_ent_groups)
                 if self.config.use_thres_train and mode == "train":
                     ent_count = len(entity)
-                    gold_count = len(gold_draft_ent_groups)
+                    G = len(gold_draft_ent_groups)
                     gamma = self.config.get("use_thres_gamma", 0.5)
                     pred_count = len([1 for e in pred_draft_ent_groups if e[2] > gamma])
                     r = theta.filter.train_metrics.get("recall", 0)
@@ -257,37 +264,59 @@ class REModel(pl.LightningModule):
                     #     r = theta.filter.train_metrics.get("f1", 0)
                     # elif self.config.filter_strategy_metric == "precision":
                     #     r = theta.filter.train_metrics.get("precision", 0)
-
+                    labels_gold_count = len([1 for e in gold_draft_ent_groups if e[2] != 0])
+                    val_threshold = self.config.get("use_thres_threshold", 0.0001)
+                    val_pos_count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
                     # 2023-0510
                     strategy = self.config.use_filter_strategy
                     if strategy == "0903":
-                        count = max(int(np.ceil(ent_count * (1 - r))), int(gold_count - gold_count * r + pred_count * r * 2))
+                        count = max(int(np.ceil(ent_count * (1 - r))), int(G - G * r + pred_count * r * 2))
                     elif strategy == "0927":
-                        count = max(ent_count, int(gold_count - gold_count * r + pred_count * r * 2))
+                        count = max(ent_count, int(G - G * r + pred_count * r * 2))
                     elif strategy == "0928":
-                        count = max(int(np.ceil(ent_count * (1 - r / 2)) + 1), int(gold_count - gold_count * r + pred_count * r * 2))
+                        count = max(int(np.ceil(ent_count * (1 - r / 2)) + 1), int(G - G * r + pred_count * r * 2))
                     elif strategy == "1007":
-                        count = max(int(np.ceil(ent_count * (1 - r / 2))), int(gold_count - gold_count * r + pred_count * r))
+                        count = max(int(np.ceil(ent_count * (1 - r / 2))), int(G - G * r + pred_count * r))
                     elif strategy == "1008":
-                        count = max(0, int(gold_count - gold_count * r + pred_count * r * 2))
+                        count = max(0, int(G - G * r + pred_count * r * 2))
                     elif strategy == "1017":
-                        val_threshold = self.config.get("use_thres_threshold", 0.0001)
-                        val_pos_count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
-                        count = max(val_pos_count, int(gold_count - gold_count * r + pred_count * r * 2))
-                    elif strategy == "1019":
-                        val_threshold = self.config.get("use_thres_threshold", 0.0001)
-                        count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
+                        count = max(val_pos_count, int(G - G * r + pred_count * r * 2))
+                    elif strategy == "1028":
+                        count = max(val_pos_count, int(G - G * r + pred_count * r))
+                    elif strategy == "1029":
+                        count = min(int(np.ceil(val_pos_count * (3 - 2 * r))), G)
+                    elif strategy == "1030":
+                        count = min(int(np.ceil(val_pos_count * (3 - 2 * r ** 0.2))), G)
+                    elif strategy == "1033":
+                        count = min(int(np.ceil(val_pos_count * (3 - r ** 0.1) / 2)), G)
+                    elif strategy == "1034":
+                        count = min(int(np.ceil(labels_gold_count * (3 - r ** 0.1))), G)
+                    elif strategy == "1036":
+                        count = min(int(np.ceil(labels_gold_count * (3 - r ** 0.5))), G)
+                    elif strategy == "1035":
+                        count = labels_gold_count * 2
+                    elif strategy == "11042":
+                        count = labels_gold_count * 2 + 1 # 最少一个
+                    elif strategy == "11044":
+                        count = labels_gold_count * 4 + 1 # 最少一个
+                    elif strategy == "11046":
+                        count = labels_gold_count * 6 + 1 # 最少一个
+                    elif strategy == "1109":
+                        count = max(int(ent_count / 2), int(G - G * r + pred_count * r))
+                    # elif strategy == "1019":
+                    #     val_threshold = self.config.get("use_thres_threshold", 0.0001)
+                    #     count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
                     else:
-                        count = max(ent_count, int(gold_count - gold_count * r + pred_count * r))
+                        count = max(ent_count, int(G - G * r + pred_count * r))
 
                 if mode == "train" or self.config.use_gold_filter_val or self.config.filter_rate == 0:
                     draft_ent_groups = gold_draft_ent_groups[:count]
                 else:
                     draft_ent_groups = pred_draft_ent_groups
 
-                gold_count = len([1 for e in gold_draft_ent_groups if e[2] != 0])
-                assert gold_count == 0 or gold_count != len(gold_draft_ent_groups), "不对劲"
-                assert gold_count == 0 or len(ids) + gold_count * 3 <= max_len, "实体过多，超过最大长度"
+                gold_triples_count = len([1 for e in gold_draft_ent_groups if e[2] != 0])
+                # assert gold_triples_count == 0 or gold_triples_count <= len(gold_draft_ent_groups), "不对劲"
+                assert gold_triples_count == 0 or len(ids) + gold_triples_count * 3 <= max_len, "实体过多，超过最大长度"
 
             else:
                 draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
@@ -314,54 +343,67 @@ class REModel(pl.LightningModule):
 
                     ss_tid = theta.tag_ids[sub_t]
                     os_tid = theta.tag_ids[obj_t]
-                    se_tid = theta.tag_ids[sub_t + self.ent_type_num]
-                    oe_tid = theta.tag_ids[obj_t + self.ent_type_num]
+                    # se_tid = theta.tag_ids[sub_t + self.ent_type_num]
+                    # oe_tid = theta.tag_ids[obj_t + self.ent_type_num]
 
                     mask_bio_id = theta.ent_ids[0]
                     ss_bio_id = theta.ent_ids[sub_t + 1]
                     os_bio_id = theta.ent_ids[obj_t + 1]
-                    se_bio_id = theta.ent_ids[sub_t + self.ent_type_num + 1]
-                    oe_bio_id = theta.ent_ids[obj_t + self.ent_type_num + 1]
+                    # se_bio_id = theta.ent_ids[sub_t + self.ent_type_num + 1]
+                    # oe_bio_id = theta.ent_ids[obj_t + self.ent_type_num + 1]
 
                     ss_pid = sub_s - sent_s
                     os_pid = obj_s - sent_s
-                    se_pid = sub_e - sent_s + 2
-                    oe_pid = obj_e - sent_s + 2
+                    # se_pid = sub_e - sent_s + 2
+                    # oe_pid = obj_e - sent_s + 2
 
-                    if not self.config.use_rel_opt1 or self.config.use_rel_opt1.startswith("obj"):
-                        mask_pos = os_pid
-                    elif self.config.use_rel_opt1.startswith("sub"):
-                        mask_pos = ss_pid
-                    elif self.config.use_rel_opt1.startswith("mid"):
-                        mask_pos = int((ss_pid + os_pid) / 2)
+                    mask_pos = os_pid
+                    # if not self.config.use_rel_opt1 or self.config.use_rel_opt1.startswith("obj"):
+                    #     mask_pos = os_pid
+                    # elif self.config.use_rel_opt1.startswith("sub"):
+                    #     mask_pos = ss_pid
+                    # elif self.config.use_rel_opt1.startswith("mid"):
+                    #     mask_pos = int((ss_pid + os_pid) / 2)
                     # elif self.config.use_rel_opt1 == "start":
                     #     mask_pos = 0
                     # elif self.config.use_rel_opt1 == "start_pos":
                     #     mask_pos = sent_s
+                    # else:
+                    #     raise Exception(f"use_rel_opt1 参数错误: {self.config.use_rel_opt1}")
+
+                    if self.config.use_rel_refine:
+                        ids += [ss_tid, mask_token, os_tid]
+                        pos_ids += [ss_pid, mask_pos, os_pid]
+                        # pos_id2 += [mask_pos, se_pid, oe_pid]
+                        bio_ids += [ss_bio_id, mask_bio_id, os_bio_id]
+                        masks += [marker_mask] * 3
                     else:
-                        raise Exception(f"use_rel_opt1 参数错误: {self.config.use_rel_opt1}")
+                        ids += [mask_token, ss_tid, os_tid]
+                        pos_ids += [mask_pos, ss_pid, os_pid]
+                        # pos_id2 += [mask_pos, se_pid, oe_pid]
+                        bio_ids += [mask_bio_id, ss_bio_id, os_bio_id]
+                        masks += [marker_mask] * 3
 
-                    ids += [mask_token, ss_tid, os_tid]
-                    pos_ids += [mask_pos, ss_pid, os_pid]
-                    # pos_id2 += [mask_pos, se_pid, oe_pid]
-                    bio_ids += [mask_bio_id, ss_bio_id, os_bio_id]
-                    masks += [marker_mask] * 3
-
-                    if self.config.use_rel_opt1.endswith("+"):
-                        ids += [se_tid, oe_tid]
-                        pos_ids += [se_pid, oe_pid]
-                        # pos_id2 += [se_pid, oe_pid]
-                        bio_ids += [se_bio_id, oe_bio_id]
-                        masks += [marker_mask] * 2
+                    # if self.config.use_rel_opt1.endswith("+"):
+                    #     ids += [se_tid, oe_tid]
+                    #     pos_ids += [se_pid, oe_pid]
+                    #     # pos_id2 += [se_pid, oe_pid]
+                    #     bio_ids += [se_bio_id, oe_bio_id]
+                    #     masks += [marker_mask] * 2
 
                     if self.config.use_rel_opt2 == "max":  # default head, options: head, tail, max, mean
                         ent_hidden_states.append(torch.stack([
                             hidden_state[b, sub_s:sub_e].max(dim=0)[0],
                             hidden_state[b, obj_s:obj_e].max(dim=0)[0]])) # 最大池化
                     elif self.config.use_rel_opt2 == "mean":
-                        ent_hidden_states.append(torch.stack([
-                            hidden_state[b, sub_s:sub_e].mean(dim=0),
-                            hidden_state[b, obj_s:obj_e].mean(dim=0)]))
+                        if self.config.use_length_embedding:
+                            ent_hidden_states.append(torch.stack([
+                                hidden_state[b, sub_s:sub_e].mean(dim=0) + self.length_embedding(torch.tensor(sub_e - sub_s, device=hidden_state.device)),
+                                hidden_state[b, obj_s:obj_e].mean(dim=0) + self.length_embedding(torch.tensor(obj_e - obj_s, device=hidden_state.device))]))
+                        else:
+                            ent_hidden_states.append(torch.stack([
+                                hidden_state[b, sub_s:sub_e].mean(dim=0),
+                                hidden_state[b, obj_s:obj_e].mean(dim=0)]))
                     # elif self.config.use_rel_opt2 == "mean+":
                     #     ent_hs = torch.stack([
                     #         hidden_state[b, sub_s:sub_e].mean(dim=0),
@@ -475,64 +517,83 @@ class REModel(pl.LightningModule):
 
             # attention
             sent_mask = torch.where(rel_attention_mask_pad == 1, 1.0, 0.0).to(device)
-            # if self.config.use_rel_attn:
-            #     max_sent_len = (rel_attention_mask_pad == 1).sum(dim=-1).max().item()
-            #     sent_mask_attn = sent_mask[:, :max_sent_len]
-            #     rel_sent_hs = rel_stage_hs * (rel_attention_mask_pad == 1).unsqueeze(-1).to(device)
-            #     rel_sent_hs = rel_sent_hs[:, :max_sent_len, :]
+            if self.config.use_rel_attn:
+                max_sent_len = (rel_attention_mask_pad == 1).sum(dim=-1).max().item()
+                sent_mask_attn = sent_mask[:, :max_sent_len]
+                rel_sent_hs = rel_stage_hs * (rel_attention_mask_pad == 1).unsqueeze(-1).to(device)
+                rel_sent_hs = rel_sent_hs[:, :max_sent_len, :]
 
-            #     rel_triplet_hs = []
-            #     rel_triplet_mask = []
-            #     for bi in range(bsz):
-            #         rel_triplet_mask.append(rel_attention_mask_pad[bi, rel_attention_mask_pad[bi] > 1])
-            #         rel_triplet_hs.append(rel_stage_hs[bi, rel_attention_mask_pad[bi] > 1])
+                rel_triplet_hs = []
+                rel_triplet_mask = []
+                for bi in range(bsz):
+                    rel_triplet_mask.append(rel_attention_mask_pad[bi, rel_attention_mask_pad[bi] > 1])
+                    rel_triplet_hs.append(rel_stage_hs[bi, rel_attention_mask_pad[bi] > 1])
 
-            #     rel_triplet_hs = nn.utils.rnn.pad_sequence(rel_triplet_hs, batch_first=True, padding_value=0)
-            #     rel_triplet_mask = nn.utils.rnn.pad_sequence(rel_triplet_mask, batch_first=True, padding_value=0)
+                rel_triplet_hs = nn.utils.rnn.pad_sequence(rel_triplet_hs, batch_first=True, padding_value=0)
+                rel_triplet_mask = nn.utils.rnn.pad_sequence(rel_triplet_mask, batch_first=True, padding_value=0)
 
-            #     mask_2d = rel_triplet_mask.unsqueeze(-1) * rel_triplet_mask.unsqueeze(-2)
-            #     mask_mask = (rel_triplet_mask ** 2).unsqueeze(1)
-            #     mask_2d_pos = (mask_2d > 0)
-            #     rel_triplet_mask_2d = torch.where(mask_2d == mask_mask, 1.0, 0.0)
-            #     rel_triplet_mask_2d = (rel_triplet_mask_2d * mask_2d_pos.float()).to(device)
+                mask_2d = rel_triplet_mask.unsqueeze(-1) * rel_triplet_mask.unsqueeze(-2)
+                mask_mask = (rel_triplet_mask ** 2).unsqueeze(1)
+                mask_2d_pos = (mask_2d > 0)
+                rel_triplet_mask_2d = torch.where(mask_2d == mask_mask, 1.0, 0.0)
+                rel_triplet_mask_2d = (rel_triplet_mask_2d * mask_2d_pos.float()).to(device)
 
-            #     rel_triplet_hs = self.rel_attn_model(hidden_states=rel_triplet_hs,
-            #                                         attention_mask=rel_triplet_mask_2d,
-            #                                         encoder_hidden_states=rel_sent_hs,
-            #                                         encoder_attention_mask=sent_mask_attn)
+                if self.config.use_rel_ner:
+                    ner_labels = (bio_tags - theta.ent_ids[0])[:, :max_sent_len]
+                    logits, sent_ner_loss, ner_hs = theta.ner_model(rel_sent_hs, labels=ner_labels, mask=sent_mask_attn, return_hs=True)
+                    encoder_hidden_states = ner_hs
+                else:
+                    encoder_hidden_states = rel_sent_hs
+
+                rel_triplet_hs = self.decoder(hidden_states=rel_triplet_hs,
+                                                attention_mask=rel_triplet_mask_2d,
+                                                encoder_hidden_states=encoder_hidden_states,
+                                                encoder_attention_mask=sent_mask_attn)[-1]
+
+                mask_pos = torch.where(rel_triplet_mask > 0)
+                hs = rel_triplet_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
+                # rel_hidden_states = hs[::3]
+                # sub_tag_hs = hs[1::3]
+                # obj_tag_hs = hs[2::3]
+
+                if self.config.use_rel_refine:
+                    rel_hidden_states = hs[1::3]
+                    sub_tag_hs = hs[0::3]
+                    obj_tag_hs = hs[2::3]
+                else:
+                    rel_hidden_states = hs[::3]
+                    sub_tag_hs = hs[1::3]
+                    obj_tag_hs = hs[2::3]
+
+            else:
+                # 找到 mask 的 Hidden State
+                mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
+                rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
+
+                # sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+                # obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
+
+                if self.config.use_rel_refine:
+                    sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]-1]
+                    obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+                else:
+                    sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
+                    obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
 
 
-            #     mask_pos = torch.where(rel_triplet_mask > 0)
-            #     hs = rel_triplet_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
-            #     rel_hidden_states = hs[::3]
-            #     sub_tag_hs = hs[1::3]
-            #     obj_tag_hs = hs[2::3]
+                if self.config.use_rel_ner:
+                    if self.config.use_rel_ner == "no_mask":
+                        sent_mask = torch.where(rel_attention_mask_pad > 0, 1, 0).to(device)
+                    else:
+                        sent_mask = torch.where(rel_attention_mask_pad == 1, 1, 0).to(device)
+                    logits, sent_ner_loss = theta.ner_model(rel_stage_hs, labels=(bio_tags - theta.ent_ids[0]), mask=sent_mask)
 
+            # if self.config.use_rel_opt1 is str and self.config.use_rel_opt1.endswith("+"):
+            #     sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1] + rel_stage_hs[mask_pos[0], mask_pos[1]+3]
+            #     obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2] + rel_stage_hs[mask_pos[0], mask_pos[1]+4]
             # else:
-            #     # 找到 mask 的 Hidden State
-            #     mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
-            #     rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
-
             #     sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
             #     obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
-            # 找到 mask 的 Hidden State
-            mask_pos = torch.where(rel_input_ids == theta.tokenizer.mask_token_id)
-            rel_hidden_states = rel_stage_hs[mask_pos[0], mask_pos[1]] # copilot NewBee
-
-
-            if self.config.use_rel_ner:
-                if self.config.use_rel_ner == "no_mask":
-                    sent_mask = torch.where(rel_attention_mask_pad > 0, 1, 0).to(device)
-                else:
-                    sent_mask = torch.where(rel_attention_mask_pad == 1, 1, 0).to(device)
-                logits, sent_ner_loss = theta.ner_model(rel_stage_hs, labels=(bio_tags - theta.ent_ids[0]), mask=sent_mask)
-
-            if self.config.use_rel_opt1 is str and self.config.use_rel_opt1.endswith("+"):
-                sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1] + rel_stage_hs[mask_pos[0], mask_pos[1]+3]
-                obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2] + rel_stage_hs[mask_pos[0], mask_pos[1]+4]
-            else:
-                sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
-                obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]
 
             # sub_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+1]
             # obj_tag_hs = rel_stage_hs[mask_pos[0], mask_pos[1]+2]

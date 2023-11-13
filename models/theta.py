@@ -29,6 +29,9 @@ class Theta(pl.LightningModule):
         ModelClass = getBertForMaskedLMClass(config.model)
         self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
 
+        if self.config.use_length_embedding:
+            self.length_embedding = nn.Embedding(512, config.model.hidden_size)
+
         # if config.use_two_plm:
         #     self.plm_model_for_re = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
 
@@ -349,7 +352,7 @@ class Theta(pl.LightningModule):
 
             task_warmup_index = int(self.config.get("task_warmup_index", 1))
             rate_func = lambda x, a: min(a, (self.current_epoch + 1) / int(x)) if x else 1
-            rel_rate = rate_func(self.config.use_warmup_rel, 1) ** task_warmup_index * self.config.rel_rate
+            rel_rate = rate_func(self.config.use_warmup_rel, self.config.use_rel_max_rate or 1) ** task_warmup_index * self.config.rel_rate
             ner_rate = rate_func(self.config.use_warmup_ner, 1) ** task_warmup_index * self.config.ner_rate
             filter_rate = rate_func(self.config.use_warmup_filter, 1) ** task_warmup_index * self.config.filter_rate
 

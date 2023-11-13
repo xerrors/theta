@@ -255,7 +255,7 @@ def get_language_map_dict():
         'GPE': 'entity geopolitical',
         'ORG': 'entity organization',
         'PER': 'entity person',
-        
+
         'Task': 'task',
         'Method': 'method',
         'Metric': 'metric',

@@ -31,8 +31,11 @@ class FilterModel(pl.LightningModule):
         dropout_rate = self.config.filter_dropout_rate # 0.1 default
 
         # attention_out_dim = int(self.config.model.hidden_size * float(self.config.get("use_filter_opt4", 1.0)))
-        self.tag_size = len(self.config.dataset.rels) + 1 if self.config.use_filter_opt1 == "concat_pro" else 1
+        self.tag_size = len(self.config.dataset.rels) + 1
+        self.get_bio_tag_embedding = lambda d:theta.plm_model.get_input_embeddings()(torch.tensor(theta.ent_ids, device=d))
 
+        if self.config.use_length_embedding:
+            self.length_embedding = theta.length_embedding
         # if self.config.use_filter_attn:
 
         #     self.attn_mode = self.config.use_filter_attn[0]
@@ -63,8 +66,22 @@ class FilterModel(pl.LightningModule):
         self.filter_entity_pair_net = MultiNonLinearClassifier(
             hidden_size * 2,
             dropout_rate=dropout_rate,
-            hidden_dim=256 if self.config.use_filter_pro else None,
+            hidden_dim=None,
             tag_size=self.tag_size)
+
+        if self.config.use_rel_classifier_as_filter:
+            self.filter_entity_pair_net = theta.rel_model.classifier # 此部分在这个模块是不计算梯度的，应该使用
+            self.sent_proj = nn.Linear(hidden_size, hidden_size)
+        elif self.config.use_filter_sent_hs:
+            self.sent_proj = nn.Linear(hidden_size, hidden_size)
+            self.filter_entity_pair_net = MultiNonLinearClassifier(
+                hidden_size * 3,
+                dropout_rate=dropout_rate,
+                hidden_dim=None,
+                tag_size=self.tag_size)
+
+            # 为了保证特征经过 linear 之后变化不大，参数初始化为
+            # nn.init.normal_(self.sent_proj.weight, std=0.02)
 
         self.hard_filter_table = torch.load("datasets/ace2005/ent_rel_corres.data").sum(dim=-1)
         self.dropout_hidden_state = nn.Dropout(0.1)
@@ -134,12 +151,17 @@ class FilterModel(pl.LightningModule):
                 head_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])
                 tail_hs = torch.stack([hidden_state[i, ent[1]-1] for ent in entities[i]])
                 ent_hs = head_hs + tail_hs
-            elif self.config.use_rel_opt2 == "mean" or self.config.use_rel_opt2 == "mean+":
+            elif self.config.use_rel_opt2 == "mean":
                 ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].mean(dim=0) for ent in entities[i]])
             elif self.config.use_rel_opt2 == "max":
                 ent_hs = torch.stack([hidden_state[i, ent[0]:ent[1]].max(dim=0)[0] for ent in entities[i]])
             else:
                 raise NotImplementedError("use_rel_opt2: {}".format(self.config.use_rel_opt2))
+
+
+            if self.config.use_length_embedding:
+                length_embeds = self.length_embedding(torch.tensor([ent[1] - ent[0] for ent in entities[i]], device=hidden_state.device))
+                ent_hs += length_embeds
 
             # if self.attn_opt == '1':
             #     tag_embeddings = self.word_embeddings(torch.tensor(self.rel_ids, device=hidden_state.device))
@@ -148,6 +170,9 @@ class FilterModel(pl.LightningModule):
             #     ent_hs = self.self_attn(ent_hs)
             #     attn_out = self.cross_attn(ent_hs.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
             #     ent_hs = self.layer_norm(ent_hs + attn_out).squeeze(0)
+            if self.config.use_filter_tag == "b":
+                ent_tag = torch.stack([self.get_bio_tag_embedding(hidden_state.device)[ent[2]+1] for ent in entities[i]])
+                ent_hs += ent_tag
 
             # ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
             ent_num, hidden_size = ent_hs.shape
@@ -155,10 +180,22 @@ class FilterModel(pl.LightningModule):
             ent_hs_x = self.sub_proj(ent_hs)
             ent_hs_y = self.obj_proj(ent_hs)
 
+            if self.config.use_filter_tag == "a":
+                ent_tag = torch.stack([self.get_bio_tag_embedding(hidden_state.device)[ent[2]+1] for ent in entities[i]])
+                ent_hs_x += ent_tag
+                ent_hs_y += ent_tag
+
             ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
             ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
-            ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)    # (ent_num, ent_num, hidden_size * 2)
-            ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
+
+            if self.config.use_rel_classifier_as_filter or self.config.use_filter_sent_hs:
+                sent_hs = self.sent_proj(hidden_state[i][0])
+                sent_hs = sent_hs.unsqueeze(0).repeat(ent_num, ent_num, 1)
+                ent_hs_pair = torch.cat([sent_hs, ent_hs_x, ent_hs_y], dim=-1)
+                ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
+            else:
+                ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)    # (ent_num, ent_num, hidden_size * 2)
+                ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
 
             # if self.attn_opt == '3':
             #     tag_embeddings = self.word_embeddings(torch.tensor(self.rel_ids, device=hidden_state.device))
@@ -218,16 +255,12 @@ class FilterModel(pl.LightningModule):
             #     self.loss_weight[0] = float(self.config.get("na_filter_weight", 1)) * sin_warm(current_epoch / int(self.config.use_filter_na_warm_up))
 
             if self.config.use_filter_focal_loss:
-                if self.config.use_filter_focal_loss == "sum": # TODO: temp
-                    scale_rate = int(self.config.use_filter_loss_sum)
-                    assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
-                    loss_fct = focal_loss(alpha=None, gamma=2, num_classes=self.tag_size, size_average=False)
-                    loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 / self.loss_weight.sum() * self.tag_size
-                else:
-                    loss_fct = focal_loss(alpha=None, gamma=2, num_classes=self.tag_size, size_average=True)
-                    loss = loss_fct(logits, labels.long())
+                scale_rate = int(self.config.use_filter_loss_sum) * 100
+                assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
+                loss_fct = focal_loss(alpha=None, gamma=2, num_classes=self.tag_size, size_average=False)
+                loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 / self.loss_weight.sum() * self.tag_size
 
-            if self.config.use_filter_loss_sum:
+            elif self.config.use_filter_loss_sum:
                 scale_rate = int(self.config.use_filter_loss_sum)
                 assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device)) # , label_smoothing=0.1
@@ -348,9 +381,33 @@ class FilterModel(pl.LightningModule):
                     ent_groups.append((sub_pos, obj_pos, score))
 
             if pred is not None:
-                if self.config.use_pair_sort_fix:
+                if self.config.use_negative == "refine":
                     ent_groups = sorted(ent_groups, key=lambda a : (bool(a[2]), a[3]), reverse=True)
                     ent_groups = [g[:3] for g in ent_groups]
+                elif self.config.use_negative == "simple":
+                    ent_groups = sorted(ent_groups, key=lambda a : (bool(a[2]), -a[3]), reverse=True)
+                    ent_groups = [g[:3] for g in ent_groups]
+                elif self.config.use_negative == "random":
+                    ent_groups = sorted(ent_groups, key=lambda a : bool(a[2]), reverse=True)
+                    ent_groups = [g[:3] for g in ent_groups]
+                elif self.config.use_negative == "random2":
+                    ent_groups = sorted(ent_groups, key=lambda a : bool(a[2]), reverse=True)
+                    ent_groups = [g[:3] for g in ent_groups if g[3] > 1e-6]
+                elif self.config.use_negative == "noise":
+                    metric = self.train_metrics.get("f1", 0)
+                    noise = np.random.normal(0, 1 - metric, len(ent_groups))
+                    ent_groups_with_noise = [(g[0], g[1], g[2], g[3] + noise[i]) for i, g in enumerate(ent_groups)]
+                    ent_groups_with_noise = sorted(ent_groups_with_noise, key=lambda a : (bool(a[2]), a[3]), reverse=True)
+                    ent_groups = [g[:3] for g in ent_groups_with_noise]
+                elif self.config.use_negative == "noise2":
+                    metric = self.train_metrics.get("f1", 0)
+                    noise = np.random.normal(0, 1 - metric, len(ent_groups))
+                    ent_groups_with_noise = [(g[0], g[1], g[2], g[3] + noise[i]) for i, g in enumerate(ent_groups)]
+                    ent_groups_with_noise = sorted(ent_groups_with_noise, key=lambda a : (bool(a[2]), a[3]), reverse=True)
+                    ent_groups = [g[:3] for g in ent_groups_with_noise if g[3] > 1e-6]
+                elif self.config.use_negative == "init2":
+                    ent_groups = sorted(ent_groups, key=lambda a : (a[2], a[3]), reverse=True)
+                    ent_groups = [g[:3] for g in ent_groups if g[3] > 1e-6]
                 else:
                     ent_groups = sorted(ent_groups, key=lambda a : (a[2], a[3]), reverse=True)
                     ent_groups = [g[:3] for g in ent_groups]

@@ -12,7 +12,7 @@ import utils
 from data.data_module import DataModule
 from xerrors import cprint
 
-# import logging
+import logging
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -36,7 +36,7 @@ def main(func_mode=False, **kwargs):
     early_callback = pl.callbacks.EarlyStopping( # type: ignore
         monitor="val_f1", mode="max", patience=30, check_on_train_epoch_end=False)
     model_checkpoint = pl.callbacks.ModelCheckpoint( # type: ignore
-        monitor="val_f1", mode="max", save_last=True,
+        monitor="val_f1", mode="max", save_last=True, save_top_k=5,
         filename='f1={val_f1:.4f}-epoch={epoch}',
         dirpath=os.path.join(config.output_dir, "checkpoints"),
         auto_insert_metric_name=False,
@@ -105,9 +105,9 @@ def main(func_mode=False, **kwargs):
 def configure_logger(config):
     """ TensorBoardLogger (offline) or WandbLogger (Online) """
 
-    # logging.getLogger("lightning").setLevel(logging.WARNING)
-    # logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
-    # logging.getLogger("wandb").setLevel(logging.WARNING)
+    logging.getLogger("lightning").setLevel(logging.WARNING)
+    logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
+    logging.getLogger("wandb").setLevel(logging.WARNING)
     logger = pl.loggers.WandbLogger( # type: ignore
         project="Filter",
         name=config.tag,
