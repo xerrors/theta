@@ -295,15 +295,6 @@ class NERModel(pl.LightningModule):
 
         is_gt = len(logits.shape) != 3 or logits.shape[-1] != self.ent_tags_count
         if not is_gt:
-            # if self.config.use_crf:
-            #     if mask is not None:
-            #         logits = nn.utils.rnn.pad_sequence(
-            #             [logits[i][mask[i] == 1] for i in range(logits.shape[0])],
-            #             batch_first=True,
-            #         ).cuda()
-            #     logits = torch.tensor(self.crf.decode(logits), device=logits.device)
-            # else:
-            #     logits = torch.argmax(logits, dim=-1)
             logits = torch.argmax(logits, dim=-1)
 
         entities = []

@@ -1,3 +1,4 @@
+from concurrent.futures import ALL_COMPLETED
 import os
 os.environ['CURL_CA_BUNDLE'] = '' # 真是闹了鬼了 https://github.com/huggingface/transformers/issues/17611#issuecomment-1323272726
 from main import main
@@ -23,34 +24,37 @@ S0 = [0, 1, 2, 3, 4]
 def run():
     # Configure Runner
     runner = Runner(
-        name=hostname + "H",
+        name=hostname + "I", # n means no focal loss a means with rate
         configuation_index="./configuation_dict.yaml",
         block_configuation=block_configuation,
     )
 
     global T
-    # T += ["output/ouput-2023-11-11_15-28-19-KH-D5-LenEmb","output/ouput-2023-11-11_12-24-41-KH-D5-LenEmb","output/ouput-2023-11-11_09-21-18-KH-D5-LenEmb","output/ouput-2023-11-11_06-18-43-KH-D5-LenEmb","output/ouput-2023-11-11_00-27-18-KH-D5-LenEmb"]
-    # T += ["output/ouput-2023-11-11_12-50-30-KH-D4","output/ouput-2023-11-11_10-48-20-KH-D4","output/ouput-2023-11-11_08-45-22-KH-D4","output/ouput-2023-11-11_04-32-14-KH-D4","output/ouput-2023-11-11_02-31-05-KH-D4"]
-    # T += ["output/ouput-2023-11-11_19-14-17-KH-D4-LenEmb","output/ouput-2023-11-11_17-03-53-KH-D4-LenEmb","output/ouput-2023-11-11_14-52-11-KH-D4-LenEmb","output/ouput-2023-11-11_06-34-48-KH-D4-LenEmb","output/ouput-2023-11-11_00-24-13-KH-D4-LenEmb"]
-    # T += ["output/ouput-2023-11-11_21-25-32-KH-D5","output/ouput-2023-11-11_18-32-43-KH-D5","output/ouput-2023-11-11_03-26-40-KH-D5","output/ouput-2023-11-10_20-22-59-KH-D5","output/ouput-2023-11-10_17-33-58-KH-D5"]
-    # T += ["output/ouput-2023-11-12_09-10-28-KH-D4-LenEmb-use_rel_refine","output/ouput-2023-11-12_07-00-12-KH-D4-LenEmb-use_rel_refine","output/ouput-2023-11-12_04-49-19-KH-D4-LenEmb-use_rel_refine","output/ouput-2023-11-12_02-39-02-KH-D4-LenEmb-use_rel_refine","output/ouput-2023-11-12_00-32-47-KH-D4-LenEmb-use_rel_refine"]
-    T += ["output/ouput-2023-11-13_06-03-01-KH-D5-LenEmb-Fstgy#1109-Neg#init2","output/ouput-2023-11-13_03-11-43-KH-D5-LenEmb-Fstgy#1109-Neg#init2","output/ouput-2023-11-13_00-16-53-KH-D5-LenEmb-Fstgy#1109-Neg#init2","output/ouput-2023-11-12_21-20-22-KH-D5-LenEmb-Fstgy#1109-Neg#init2","output/ouput-2023-11-12_03-31-54-KH-D5-LenEmb-Fstgy#1109-Neg#init2"]
-    # T += ["output/ouput-2023-11-12_18-26-33-KH-D5-LenEmb-use_rel_refine","output/ouput-2023-11-12_15-24-16-KH-D5-LenEmb-use_rel_refine","output/ouput-2023-11-12_12-32-22-KH-D5-LenEmb-use_rel_refine","output/ouput-2023-11-12_09-30-23-KH-D5-LenEmb-use_rel_refine","output/ouput-2023-11-12_00-32-29-KH-D5-LenEmb-use_rel_refine"]
+    # T += ["output/ouput-2023-11-20_20-28-58-KI-D5-ProjNorm","output/ouput-2023-11-20_17-39-56-KI-D5-ProjNorm","output/ouput-2023-11-20_15-18-29-KI-D5-ProjNorm","output/ouput-2023-11-19_23-04-19-KI-D5-ProjNorm"]
+    # T += ["output/ouput-2023-11-20_10-55-35-KI-D5-FHS-ProjNorm","output/ouput-2023-11-20_08-13-54-KI-D5-FHS-ProjNorm","output/ouput-2023-11-20_05-09-06-KI-D5-FHS-ProjNorm","output/ouput-2023-11-19_23-04-31-KI-D5-FHS-ProjNorm"]
+    # T += ["output/ouput-2023-11-20_12-55-12-KI-D5","output/ouput-2023-11-20_10-36-24-KI-D5","output/ouput-2023-11-20_07-56-59-KI-D5","output/ouput-2023-11-20_04-56-52-KI-D5","output/ouput-2023-11-20_01-59-42-KI-D5"]
+    # T += ["output/ouput-2023-11-20_21-16-15-KI-D5-FHS","output/ouput-2023-11-20_18-33-49-KI-D5-FHS","output/ouput-2023-11-20_15-58-23-KI-D5-FHS","output/ouput-2023-11-20_13-20-14-KI-D5-FHS","output/ouput-2023-11-20_02-05-59-KI-D5-FHS"]
+    T += ["output/ouput-2023-11-27_13-23-50-KI-D5-use_filter_label_enhance","output/ouput-2023-11-27_10-02-21-KI-D5-use_filter_label_enhance"]
 
 
 
-    thres = [0.03, 0.01, 0.003, 0.001, 0.0003, 0.0001]
-    thres_focal = [0.5, 0.2, 0.1, 0.05, 0.01, 0.005, 0.001, 0.0005, 0.0001]
+    thres = [0.2, 0.18, 0.15, 0.12, 0.10]
     # runner.add(dataset_config=D5, gpu=1, use_filter_focal_loss=["sum", False], use_val_same_as_test=True, seed=[42, 43, 44, 45, 46])
-    # TODO use_rel_refine use_filter_strategy 1109 random2 init2
+    # TODO tag_marker use_filter_label_enhance in ACE04 (precision 32 in ACE04) (NLLA BIO in 04)
 
-    runner.add(dataset_config=D5, gpu=0, use_cache=False, seed=[2, 3, 4])
-    # runner.add(dataset_config=D5, use_length_embedding=True, gpu=0, use_rel_refine=True, seed=S2023)
-    # runner.add(dataset_config=D5, use_length_embedding=True, gpu=0, use_negative="init2", use_rel_refine=True, seed=S2023)
-    # runner.add(dataset_config=D4, use_length_embedding=True, gpu=1, use_rel_refine=True, seed=2023, data_piece=ALL)
-    # runner.add(dataset_config=D5, gpu=1, use_filter_focal_loss="sum", use_negative=["noise2", "random2"], seed=S42)
+    # runner.add(dataset_config=D5, use_filter_label_enhance=True, seed=S0)
+    runner.add(dataset_config=D5, use_filter_strategy="1109", use_rel_loss_sum=100, use_dynamic_loss_sum=True, use_rel_na_warmup=0, seed=S2023)
+    # runner.add(dataset_config=D5, use_ner_layer_loss=[0, "Bio", True], seed=S0)
+    # runner.add(dataset_config=D5, gpu=1, use_cross_ner=True, use_ner_layer_loss=[0, "Bio"], ner_rate=2, seed=S0)
+    # runner.add(dataset_config=D5, gpu=1, use_cross_ner=True, context_window=[100, 200], seed=S0)
+
+    #! D4 1109
+    runner.add(dataset_config=D4, precision=32, batch_size=8, seed=[0, 2023], data_piece=ALL) # start with 3 TODO
+    # runner.add(dataset_config=D4, use_ner_layer_loss="Bio", seed=2023, data_piece=4) # start with 3 TODO
+    # runner.add(dataset_config=D4, use_length_embedding=True, gpu=1, use_rel_refine=True, filter_lr=[1, 3, 5], seed=2023, data_piece=ALL)
+
     # Add tests
-    runner.add_test(test_opt1=["best"], test_batch_size=1, use_thres_threshold=thres_focal, offline=True, test_from_ckpt=T)
+    runner.add_test(test_opt1=["best"], test_batch_size=1, use_thres_threshold=thres, offline =True, test_from_ckpt=T)
 
     runner.run(main,
                before_run_hook=before_run_hook,

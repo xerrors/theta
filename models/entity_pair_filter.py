@@ -65,14 +65,12 @@ class FilterModel(pl.LightningModule):
 
         self.filter_entity_pair_net = MultiNonLinearClassifier(
             hidden_size * 2,
+            layers_num=self.config.filter_mlp_layer_num or 1,
             dropout_rate=dropout_rate,
             hidden_dim=None,
             tag_size=self.tag_size)
 
-        if self.config.use_rel_classifier_as_filter:
-            self.filter_entity_pair_net = theta.rel_model.classifier # 此部分在这个模块是不计算梯度的，应该使用
-            self.sent_proj = nn.Linear(hidden_size, hidden_size)
-        elif self.config.use_filter_sent_hs:
+        if self.config.use_filter_sent_hs:
             self.sent_proj = nn.Linear(hidden_size, hidden_size)
             self.filter_entity_pair_net = MultiNonLinearClassifier(
                 hidden_size * 3,
@@ -81,7 +79,12 @@ class FilterModel(pl.LightningModule):
                 tag_size=self.tag_size)
 
             # 为了保证特征经过 linear 之后变化不大，参数初始化为
-            # nn.init.normal_(self.sent_proj.weight, std=0.02)
+        if self.config.use_filter_proj_norm:
+            nn.init.normal_(self.sub_proj.weight, std=0.02)
+            nn.init.normal_(self.obj_proj.weight, std=0.02)
+
+            if self.config.use_filter_sent_hs:
+                nn.init.normal_(self.sent_proj.weight, std=0.02)
 
         self.hard_filter_table = torch.load("datasets/ace2005/ent_rel_corres.data").sum(dim=-1)
         self.dropout_hidden_state = nn.Dropout(0.1)
@@ -125,10 +128,10 @@ class FilterModel(pl.LightningModule):
                 if i is None or j is None:
                     continue
                 index = self.convert_bij_to_index((b,i,j), entities)
-                labels[index] = t[4] + 1 if self.config.use_filter_opt1 == "concat_pro" else 1
-                # if self.config.use_filter_label_enhance:
-                #     index = self.convert_bij_to_index((b,j,i), entities)
-                #     labels[index] = 1
+                labels[index] = t[4] + 1
+                if self.config.use_filter_label_enhance:
+                    index = self.convert_bij_to_index((b,j,i), entities)
+                    labels[index] = 1
         return labels
 
     def forward(self, hidden_state, entities, triples=None, mode="train", current_epoch=None):
@@ -170,9 +173,9 @@ class FilterModel(pl.LightningModule):
             #     ent_hs = self.self_attn(ent_hs)
             #     attn_out = self.cross_attn(ent_hs.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
             #     ent_hs = self.layer_norm(ent_hs + attn_out).squeeze(0)
-            if self.config.use_filter_tag == "b":
-                ent_tag = torch.stack([self.get_bio_tag_embedding(hidden_state.device)[ent[2]+1] for ent in entities[i]])
-                ent_hs += ent_tag
+            # if self.config.use_filter_tag == "b":
+            #     ent_tag = torch.stack([self.get_bio_tag_embedding(hidden_state.device)[ent[2]+1] for ent in entities[i]])
+            #     ent_hs += ent_tag
 
             # ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
             ent_num, hidden_size = ent_hs.shape
@@ -180,15 +183,15 @@ class FilterModel(pl.LightningModule):
             ent_hs_x = self.sub_proj(ent_hs)
             ent_hs_y = self.obj_proj(ent_hs)
 
-            if self.config.use_filter_tag == "a":
-                ent_tag = torch.stack([self.get_bio_tag_embedding(hidden_state.device)[ent[2]+1] for ent in entities[i]])
-                ent_hs_x += ent_tag
-                ent_hs_y += ent_tag
+            # if self.config.use_filter_tag == "a":
+            #     ent_tag = torch.stack([self.get_bio_tag_embedding(hidden_state.device)[ent[2]+1] for ent in entities[i]])
+            #     ent_hs_x += ent_tag
+            #     ent_hs_y += ent_tag
 
             ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
             ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
 
-            if self.config.use_rel_classifier_as_filter or self.config.use_filter_sent_hs:
+            if self.config.use_filter_sent_hs:
                 sent_hs = self.sent_proj(hidden_state[i][0])
                 sent_hs = sent_hs.unsqueeze(0).repeat(ent_num, ent_num, 1)
                 ent_hs_pair = torch.cat([sent_hs, ent_hs_x, ent_hs_y], dim=-1)
@@ -257,7 +260,7 @@ class FilterModel(pl.LightningModule):
             if self.config.use_filter_focal_loss:
                 scale_rate = int(self.config.use_filter_loss_sum) * 100
                 assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
-                loss_fct = focal_loss(alpha=None, gamma=2, num_classes=self.tag_size, size_average=False)
+                loss_fct = focal_loss(alpha=self.config.use_focal_alpha, gamma=2, num_classes=self.tag_size, size_average=False)
                 loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 / self.loss_weight.sum() * self.tag_size
 
             elif self.config.use_filter_loss_sum:
@@ -265,6 +268,7 @@ class FilterModel(pl.LightningModule):
                 assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device)) # , label_smoothing=0.1
                 loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 #  / self.loss_weight.sum() * self.tag_size
+
             else:
                 loss_fct = nn.CrossEntropyLoss(reduction='mean', weight=self.loss_weight.to(logits.device))
                 loss = loss_fct(logits, labels.long())

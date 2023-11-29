@@ -36,7 +36,7 @@ def main(func_mode=False, **kwargs):
     early_callback = pl.callbacks.EarlyStopping( # type: ignore
         monitor="val_f1", mode="max", patience=30, check_on_train_epoch_end=False)
     model_checkpoint = pl.callbacks.ModelCheckpoint( # type: ignore
-        monitor="val_f1", mode="max", save_last=True, save_top_k=5,
+        monitor="val_f1", mode="max", save_last=True,
         filename='f1={val_f1:.4f}-epoch={epoch}',
         dirpath=os.path.join(config.output_dir, "checkpoints"),
         auto_insert_metric_name=False,

@@ -239,8 +239,8 @@ class REModel(pl.LightningModule):
 
             ids = [cls_token] + input_ids[b, sent_s:sent_e].tolist() + [sep_token]
             pos_ids = [b for b in range(sent_len+2)]
-            # pos_id2 = [b for b in range(sent_len+2)]
             masks = [1 for b in range(sent_len+2)]
+
 
             bio_ids = np.array([theta.ent_ids[0]] * (sent_len+2))
             for e in entity:
@@ -248,6 +248,29 @@ class REModel(pl.LightningModule):
                 bio_ids[e[0]-sent_s+2:e[1]-sent_s+1] = theta.ent_ids[e[2] + self.ent_type_num + 1]
 
             bio_ids = bio_ids.tolist()
+
+            if self.config.use_re_marker and len(entity) > 0:
+                entity = sorted(entity, key=lambda x: x[0])
+                ids_with_marker = ids[:entity[0][0]-sent_s+1]
+                pos_ids_with_marker = pos_ids[:entity[0][0]-sent_s+1]
+                bio_ids_with_marker = bio_ids[:entity[0][0]-sent_s+1]
+                for i, e in enumerate(entity):
+                    ids_with_marker += [theta.ent_ids[e[2] + 1]] + ids[e[0]-sent_s+1:e[1]-sent_s+1] + [theta.ent_ids[e[2] + self.ent_type_num + 1]]
+                    pos_ids_with_marker += [pos_ids[e[0]-sent_s+1]] + pos_ids[e[0]-sent_s+1:e[1]-sent_s+1] + [pos_ids[e[1]-sent_s]]
+                    bio_ids_with_marker += [theta.ent_ids[e[2] + 1]] + bio_ids[e[0]-sent_s+1:e[1]-sent_s+1] + [theta.ent_ids[e[2] + self.ent_type_num + 1]]
+                    if i < len(entity) - 1:
+                        ids_with_marker += ids[e[1]-sent_s+1:entity[i+1][0]-sent_s+1]
+                        pos_ids_with_marker += pos_ids[e[1]-sent_s+1:entity[i+1][0]-sent_s+1]
+                        bio_ids_with_marker += bio_ids[e[1]-sent_s+1:entity[i+1][0]-sent_s+1]
+
+                ids_with_marker += ids[entity[-1][1]-sent_s+1:]
+                pos_ids_with_marker += pos_ids[entity[-1][1]-sent_s+1:]
+                bio_ids_with_marker += bio_ids[entity[-1][1]-sent_s+1:]
+
+                masks = [1 for b in range(len(ids_with_marker))]
+                ids = ids_with_marker
+                pos_ids = pos_ids_with_marker
+                bio_ids = bio_ids_with_marker
 
             if mode != "predict":
                 pred_draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)
@@ -630,6 +653,10 @@ class REModel(pl.LightningModule):
             sub_hs = ent_hidden_states[:, 0, :] + sub_tag_hs
             obj_hs = ent_hidden_states[:, 1, :] + obj_tag_hs
 
+            if self.config.remove_ner_info:
+                sub_hs = sub_tag_hs
+                obj_hs = obj_tag_hs
+
             rel_hidden_states = torch.cat([rel_hidden_states, sub_hs, obj_hs], dim=-1)
 
             # if self.config.use_rel_opt3 == "tag":
@@ -790,6 +817,9 @@ class REModel(pl.LightningModule):
 
             elif self.config.use_rel_loss_sum:
                 scale_rate = int(self.config.use_rel_loss_sum)
+
+                if self.config.use_dynamic_loss_sum:
+                    scale_rate = scale_rate * (self.statistic["last_filter_rate"] or 1)
                 assert scale_rate > 0, "use_rel_loss_sum 参数错误"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device))
                 rel_loss = loss_fct(new_logits, new_labels) / scale_rate / self.config.batch_size * 16
@@ -812,6 +842,7 @@ class REModel(pl.LightningModule):
         self.log("statistic/train_filter_rate", self.statistic["train_gold_filtered_count"] / (self.statistic["train_gold_count"] + 1e-8))
         self.log("statistic/train_filter_rate_plus", self.statistic["train_gold_use_count"] / (self.statistic["train_gold_count"] + 1e-8))
         self.log("statistic/train_filter_rate_pred", self.statistic["train_pred_count"] / (self.statistic["train_gold_count"] + 1e-8))
+        self.statistic["last_filter_rate"] = self.statistic["train_gold_filtered_count"] / (self.statistic["train_gold_count"] + 1e-8)
         self.statistic["train_gold_count"] = 0.0
         self.statistic["train_gold_filtered_count"] = 0.0
         self.statistic["train_gold_use_count"] = 0.0
@@ -1034,3 +1065,12 @@ class REModel(pl.LightningModule):
         bert_embeddings = bert_embeddings + bio_tags_embeddings
 
         return bert_embeddings
+
+
+
+def is_overlap(entity):
+    for i in range(len(entity)):
+        for j in range(i+1, len(entity)):
+            if entity[i][1] > entity[j][0] and entity[i][0] < entity[j][1]:
+                return True
+    return False

@@ -70,3 +70,9 @@ use_pair_sort_fix: SortFix
 use_filter_tag: FTag
 use_negative: Neg
 use_length_embedding: LenEmb
+
+use_filter_sent_hs: FHS
+use_filter_proj_norm: ProjNorm
+
+use_cross_ner: CrossE
+use_dynamic_loss_sum: DynSum

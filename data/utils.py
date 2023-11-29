@@ -82,6 +82,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             sent_end = len(tokenized_tokens)
 
             # 根据窗口进行扩充
+            ner_left = []
+            ner_right = []
             if context_window:
 
                 # 填充 left
@@ -93,6 +95,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                     left_token_to_add = tokenizer.tokenize(" ".join(doc[left_sent_idx].text))[-add_left:]
                     left_tokens = left_token_to_add + left_tokens
                     add_left -= len(left_token_to_add)
+                    ner_left.extend(doc[left_sent_idx].ner)
                     left_sent_idx -= 1
 
                 sent_start = len(left_tokens)
@@ -107,6 +110,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                     right_token_to_add = tokenizer.tokenize(" ".join(doc[right_sent_idx].text))[:add_right]
                     right_tokens = right_tokens + right_token_to_add
                     add_right -= len(right_token_to_add)
+                    ner_right.extend(doc[right_sent_idx].ner)
                     right_sent_idx += 1
 
                 tokenized_tokens = tokenized_tokens + right_tokens
@@ -134,8 +138,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             sent_end += sent_start  # sent_end 包含 sep token 或者 context window 的 token
 
             span_mask = np.zeros((max_seq_len, max_seq_len), dtype=np.int16)
-            for s_i in range(sent_start, sent_end):
-                span_mask[s_i, s_i:min(sent_end, s_i+max_span_length)] = 1
+            # for s_i in range(sent_start, sent_end):
+            #     span_mask[s_i, s_i:min(sent_end, s_i+max_span_length)] = 1
 
             # 实体的位置索引映射
             start2idx = [mi + sent_start for mi in start2idx]
@@ -149,25 +153,55 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             Shape: [max_seq_len]
             """
             ent_type = {}
-            ner_total_len = 0  # 记录 ner 的总长度，用于判断是否有重叠
-            added = []  # 记录已经添加过的 ner，因为在文档 323 中存在同一个实体标注了两次，两次是不同的类型，这里以第二个类型为准
+            # ner_total_len = 0  # 记录 ner 的总长度，用于判断是否有重叠
+            # added = []  # 记录已经添加过的 ner，因为在文档 323 中存在同一个实体标注了两次，两次是不同的类型，这里以第二个类型为准
             ent_maps = torch.zeros(len(tokenized_tokens), dtype=torch.int16) # 0 表示不是实体
             ent_maps_2d = torch.zeros(len(tokenized_tokens), len(tokenized_tokens), dtype=torch.int8) # 0 表示不是实体
-            for ner in sent.ner:
-                ent_s = start2idx[ner.span.start_sent]
-                ent_e = end2idx[ner.span.end_sent]
-                # 实体边界识别 O B-0 B-1 B-2 B-3 B-4 B-5 B-6 I-0 I-1 I-2 I-3 I-4 I-5 I-6
-                #            0 1   2   3   4   5   6   7   8   9   10  11  12  13  14
-                ent_maps[ent_s] = ner2id[ner.label] + 1
-                ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
-                ent_maps_2d[ent_s, ent_e] = ner2id[ner.label] + 1 # 左闭右开
-                assert ent_s < ent_e
 
-                if ner.span not in added:
-                    ner_total_len += ent_e - ent_s
-                    added.append(ner.span)
 
-                ent_type[(ent_s, ent_e)] = ner2id[ner.label]
+            if config.use_cross_ner:
+
+                ner_all = sent.ner + ner_left + ner_right
+                added_text = []
+                for ner in ner_all:
+
+                    text = " ".join(ner.span.text)
+                    if text in added_text:
+                        continue
+
+                    # print(text)
+                    ner_tokens = tokenizer.tokenize(text)
+                    ner_s_list = find_subarray_position(tokenized_tokens, ner_tokens)
+                    if len(ner_s_list) <= 0:
+                        continue
+
+                    for ner_s in ner_s_list:
+                        ner_e = ner_s + len(ner_tokens)
+                        ent_maps[ner_s] = ner2id[ner.label] + 1
+                        ent_maps[ner_s+1:ner_e] = ner2id[ner.label] + len(ner2id) + 1
+                        ent_maps_2d[ner_s, ner_e] = ner2id[ner.label] + 1
+
+                        ent_type[(ner_s, ner_e)] = ner2id[ner.label]
+
+                    added_text.append(text)
+
+            else:
+                for ner in sent.ner:
+                    ent_s = start2idx[ner.span.start_sent]
+                    ent_e = end2idx[ner.span.end_sent]
+                    # 实体边界识别 O B-0 B-1 B-2 B-3 B-4 B-5 B-6 I-0 I-1 I-2 I-3 I-4 I-5 I-6
+                    #            0 1   2   3   4   5   6   7   8   9   10  11  12  13  14
+                    ent_maps[ent_s] = ner2id[ner.label] + 1
+                    ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
+                    ent_maps_2d[ent_s, ent_e] = ner2id[ner.label] + 1 # 左闭右开
+                    assert ent_s < ent_e
+
+                    # if ner.span not in added:
+                    #     ner_total_len += ent_e - ent_s
+                    #     added.append(ner.span)
+
+                    ent_type[(ent_s, ent_e)] = ner2id[ner.label]
+
 
             triples = set()
 
@@ -188,6 +222,10 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             triples = list(triples) + [(-1, -1, -1, -1, -1, -1, -1)] * (max_tripes_count - len(triples))
             sent_mask = torch.zeros_like(ent_maps)
             sent_mask[sent_start:sent_end] = 1
+
+            if config.use_cross_ner:
+                sent_mask = torch.ones_like(ent_maps)
+                sent_mask[input_ids == tokenizer.pad_token_id] = 0
 
             sample['input_ids'] = input_ids
             sample['triples'] = torch.tensor(triples, dtype=torch.int16)
@@ -347,3 +385,16 @@ def get_language_map_dict():
 #     data.documents = new_docs
 #     return data
 
+def find_subarray_position(s, a):
+    """在 s 中寻找 a 的位置，返回 a 在 s 中的起始位置， s 中可能有多个 a，返回列表"""
+    n = len(s)
+    m = len(a)
+
+    if m > n:
+        return []
+    else:
+        res = []
+        for i in range(n-m+1):
+            if s[i:i+m] == a:
+                res.append(i)
+        return res

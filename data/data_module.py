@@ -52,7 +52,12 @@ class DataModule(pl.LightningDataModule):
             elif self.config.dataset.name == 'scierc':
                 filename = self.config.dataset[mode]
 
-            cache_path = filename + ".cache"
+            cache_tag = ""
+            cache_tag += f".max{self.config.max_seq_len}"
+            cache_tag += f".ctw{self.config.context_window}"
+            cache_tag += ".cross_ner" if self.config.use_cross_ner else ""
+
+            cache_path = filename + cache_tag + ".cache"
             if os.path.exists(cache_path) and self.config.use_cache:
                 print(utils.green_background("Cache found!"), utils.green(f"Loading {mode} data from {cache_path}"))
                 datasets = torch.load(cache_path)

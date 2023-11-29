@@ -323,11 +323,7 @@ class Theta(pl.LightningModule):
 
         # 如果是测试阶段，使用预测的 triples
         if mode != "train":
-            # if self.config.use_spert:
-            #     entities = self.span_ner.decode_entities(ner_logits, span_mask, pos=pos)
-            # elif self.config.ner_rate > 0 and not self.config.use_gold_ent_val:
-            #     entities = self.ner_model.decode_entities(ner_logits, pos=pos, mask=sent_mask)
-            entities = self.ner_model.decode_entities(ner_logits, pos=pos, mask=sent_mask)
+            entities = self.ner_model.decode_entities(ner_logits, pos=pos)
             output["pred_entities"] = entities
 
             if sum([len(e) for e in entities]) > 0:
@@ -357,6 +353,14 @@ class Theta(pl.LightningModule):
             filter_rate = rate_func(self.config.use_warmup_filter, 1) ** task_warmup_index * self.config.filter_rate
 
             loss = ner_loss * ner_rate + rel_loss * rel_rate + filter_loss * filter_rate + sent_ner_loss * rel_ner_rate
+
+            # stop_grad
+            if self.config.loss_stop_grad:
+                ner_rate = 1 / (ner_loss.detach().item() + 1e-8) * ner_rate
+                rel_rate = 1 / (rel_loss.detach().item() + 1e-8) * rel_rate
+                filter_rate = 1 / (filter_loss.detach().item() + 1e-8) * filter_rate
+                rel_ner_rate = 1 / (sent_ner_loss.detach().item() + 1e-8) * rel_ner_rate
+                loss = ner_loss * ner_rate + rel_loss * rel_rate + filter_loss * filter_rate + sent_ner_loss * rel_ner_rate
 
             self.log("loss/ner_loss", ner_loss)
             self.log("loss/rel_loss", rel_loss)

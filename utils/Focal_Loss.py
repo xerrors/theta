@@ -23,6 +23,7 @@ class focal_loss(nn.Module):
         else:
             assert alpha < 1   #如果α为一个常数,则降低第一类的影响,在目标检测中第一类为背景类
             self.alpha = torch.Tensor([alpha] + [1 - alpha] * (num_classes-1)) # α 最终为 [ α, 1-α, 1-α, 1-α, 1-α, ...] size:[num_classes]
+            self.alpha = self.alpha / self.alpha.sum() * num_classes
 
         self.gamma = gamma
         self.num_classes = num_classes
