@@ -348,6 +348,8 @@ class Theta(pl.LightningModule):
 
             task_warmup_index = int(self.config.get("task_warmup_index", 1))
             rate_func = lambda x, a: min(a, (self.current_epoch + 1) / int(x)) if x else 1
+            if self.config.use_fix_rate:
+                rate_func = lambda x, a: min(a, 0.001 + self.current_epoch / int(x)) if x else 1
             rel_rate = rate_func(self.config.use_warmup_rel, self.config.use_rel_max_rate or 1) ** task_warmup_index * self.config.rel_rate
             ner_rate = rate_func(self.config.use_warmup_ner, 1) ** task_warmup_index * self.config.ner_rate
             filter_rate = rate_func(self.config.use_warmup_filter, 1) ** task_warmup_index * self.config.filter_rate

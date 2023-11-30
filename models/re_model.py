@@ -807,19 +807,21 @@ class REModel(pl.LightningModule):
             new_logits = logits.view(-1, len(self.rel_ids))
             new_labels = triple_labels.view(-1)
 
-            if self.config.use_rel_na_warmup:
+            if self.config.use_rel_na_warmup: # 5
                 sin_warm = lambda x: np.sin((min(1, x + 0.001) * np.pi / 2))
                 self.loss_weight[0] = float(self.config.get("na_rel_weight", 1)) * sin_warm(theta.current_epoch / int(self.config.use_rel_na_warmup))
 
-            if self.config.use_rel_focal_loss:
+            if self.config.use_rel_focal_loss: # False
                 loss_fct = focal_loss(alpha=None, gamma=2, num_classes=len(self.rel_ids))
                 rel_loss = loss_fct(new_logits, new_labels)
 
             elif self.config.use_rel_loss_sum:
-                scale_rate = int(self.config.use_rel_loss_sum)
 
                 if self.config.use_dynamic_loss_sum:
-                    scale_rate = scale_rate * (self.statistic["last_filter_rate"] or 1)
+                    scale_rate = int(self.config.use_rel_loss_sum) * (self.statistic["last_filter_rate"] or 1)
+                else:
+                    scale_rate = int(self.config.use_rel_loss_sum)
+
                 assert scale_rate > 0, "use_rel_loss_sum 参数错误"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device))
                 rel_loss = loss_fct(new_logits, new_labels) / scale_rate / self.config.batch_size * 16
