@@ -209,7 +209,7 @@ class REModel(pl.LightningModule):
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode, current_epoch=theta.current_epoch)
             labels = None
 
-        max_len= 512 #  if mode == "train" else 1024
+        max_len= self.config.rel_max_len or 512 #  if mode == "train" else 1024
         ent_groups = []
         bio_tags = []
         rel_input_ids = []
@@ -233,6 +233,8 @@ class REModel(pl.LightningModule):
             if pos is not None:
                 sent_s, sent_e = pos[b, 0], pos[b, 1]
                 sent_len = sent_e - sent_s
+                if sent_len > max_len:
+                    max_len = sent_len + 15 # for min 5 entities
             else:
                 sent_len = (input_ids[b] != pad_token).sum().item()
                 sent_s, sent_e = 0, sent_len
@@ -326,6 +328,8 @@ class REModel(pl.LightningModule):
                         count = labels_gold_count * 6 + 1 # 最少一个
                     elif strategy == "1109":
                         count = max(int(ent_count / 2), int(G - G * r + pred_count * r))
+                    elif strategy == "1130":
+                        count = max(5, int(G - G * r + pred_count * r))
                     # elif strategy == "1019":
                     #     val_threshold = self.config.get("use_thres_threshold", 0.0001)
                     #     count = len([1 for e in pred_draft_ent_groups if e[2] > val_threshold])
@@ -339,7 +343,7 @@ class REModel(pl.LightningModule):
 
                 gold_triples_count = len([1 for e in gold_draft_ent_groups if e[2] != 0])
                 # assert gold_triples_count == 0 or gold_triples_count <= len(gold_draft_ent_groups), "不对劲"
-                assert gold_triples_count == 0 or len(ids) + gold_triples_count * 3 <= max_len, "实体过多，超过最大长度"
+                # assert gold_triples_count == 0 or len(ids) + gold_triples_count * 3 <= max_len, "实体过多，超过最大长度"
 
             else:
                 draft_ent_groups = theta.filter.get_draft_ent_groups(entities, b, map_dict, logits, mode)

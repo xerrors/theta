@@ -35,7 +35,7 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
     max_span_length = config.get("max_span_length", 10)
 
     if context_window and context_window > max_seq_len - 2:
-        print(f'context_window{context_window} > max_seq_len{max_seq_len}, context window will be set as `max_seq_len - 2`')
+        print(f'context_window {context_window} > max_seq_len {max_seq_len}, context window will be set as `max_seq_len - 2` {max_seq_len - 2}')
         context_window = max_seq_len - 2
 
     split = config.dataset.get("split", 0)
@@ -136,6 +136,9 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
             # 原本的 token 在现有的 tokens 序列中的起始位置，左闭右开
             sent_start += 1         # sent_start 不包含 cls token 或者 context window 的 token
             sent_end += sent_start  # sent_end 包含 sep token 或者 context window 的 token
+            if sent_end > max_seq_len:
+                sent_end = max_seq_len - 1
+            # assert sent_end < max_seq_len and sent_start < max_seq_len
 
             span_mask = np.zeros((max_seq_len, max_seq_len), dtype=np.int16)
             # for s_i in range(sent_start, sent_end):
@@ -177,6 +180,10 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
 
                     for ner_s in ner_s_list:
                         ner_e = ner_s + len(ner_tokens)
+
+                        if ner_s >= max_seq_len or ner_e >= max_seq_len:
+                            continue
+
                         ent_maps[ner_s] = ner2id[ner.label] + 1
                         ent_maps[ner_s+1:ner_e] = ner2id[ner.label] + len(ner2id) + 1
                         ent_maps_2d[ner_s, ner_e] = ner2id[ner.label] + 1
@@ -191,6 +198,9 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                     ent_e = end2idx[ner.span.end_sent]
                     # 实体边界识别 O B-0 B-1 B-2 B-3 B-4 B-5 B-6 I-0 I-1 I-2 I-3 I-4 I-5 I-6
                     #            0 1   2   3   4   5   6   7   8   9   10  11  12  13  14
+                    if ent_s >= max_seq_len or ent_e >= max_seq_len:
+                        continue
+
                     ent_maps[ent_s] = ner2id[ner.label] + 1
                     ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
                     ent_maps_2d[ent_s, ent_e] = ner2id[ner.label] + 1 # 左闭右开
@@ -211,6 +221,9 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                 sub_e = end2idx[rel.pair[0].end_sent] # 开区间
                 obj_s = start2idx[rel.pair[1].start_sent]
                 obj_e = end2idx[rel.pair[1].end_sent] # 开区间
+                if sub_s >= max_seq_len or sub_e >= max_seq_len or obj_s >= max_seq_len or obj_e >= max_seq_len:
+                    continue
+
                 sub_type = ent_type[(sub_s, sub_e)]
                 obj_type = ent_type[(obj_s, obj_e)]
                 triples.add((sub_s, sub_e, obj_s, obj_e, rel2id[rel.label], sub_type, obj_type))
