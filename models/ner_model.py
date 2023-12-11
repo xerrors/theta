@@ -16,10 +16,10 @@ from utils.Focal_Loss import focal_loss
 
 class EntAttentionLayer(nn.Module):
 
-    def __init__(self, config, word_embeddings_fc, ent_ids):
+    def __init__(self, config, tag_embeddings_fc, tag_size):
         super().__init__()
         self.config = config
-        self.word_embeddings_fc = word_embeddings_fc
+        self.tag_embeddings_fc = tag_embeddings_fc
         # self.self_attn = nn.MultiheadAttention(embed_dim, num_heads=4, dropout=0.1, batch_first=True)
         # self.self_ouput = nn.Sequential(
         #     nn.Linear(embed_dim, embed_dim),
@@ -46,7 +46,7 @@ class EntAttentionLayer(nn.Module):
         self.output = BertOutput(config=self.config.model)
 
         self.ent_range = self.config.ent_attn_range
-        self.ent_ids = ent_ids
+        self.tag_size = tag_size
 
         # 添加参数初始化
         # for name, param in self.named_parameters():
@@ -56,7 +56,7 @@ class EntAttentionLayer(nn.Module):
         #         init.constant_(param, 0.0)
 
     def forward(self, hidden_states):
-        tag_embeddings = self.word_embeddings_fc()(torch.tensor(self.ent_ids, device=hidden_states.device))
+        tag_embeddings = self.tag_embeddings_fc([i for i in range(self.tag_size)])
         tag_embeddings = tag_embeddings.unsqueeze(0).repeat(hidden_states.shape[0], 1, 1)
 
         if self.ent_range:
@@ -100,19 +100,15 @@ class EntDecoder(nn.Module):
     def __init__(self, config, theta):
         super().__init__()
         self.config = config
-        self.ent_ids = theta.ent_ids
 
         hidden_size = config.model.hidden_size
-        tag_size = len(self.ent_ids)
+        tag_size = len(theta.ent_ids)
 
         self.ffn = MultiNonLinearClassifier(hidden_size, tag_size, layers_num=self.config.ent_mlp_layer_num)
         self.ffn_bio = MultiNonLinearClassifier(hidden_size, 3)
         self.attn = nn.ModuleList([
-            EntAttentionLayer(config, theta.plm_model.get_input_embeddings, self.ent_ids)
+            EntAttentionLayer(config, theta.get_tag_embeddings, tag_size)
             for _ in range(config.ent_attn_layer_num)])
-
-        if self.config.use_ner == "embed":
-            self.get_bio_tag_embedding = lambda d:theta.plm_model.get_input_embeddings()(torch.tensor(self.ent_ids, device=d))
 
     def forward(self, hidden_states):
         """
@@ -130,10 +126,7 @@ class EntDecoder(nn.Module):
             # logits = self.ffn(hidden_states)
 
             if li == len(self.attn) - 1:
-                if self.config.use_ner == "embed":
-                    logits = torch.matmul(hidden_states, self.get_bio_tag_embedding(hidden_states.device).t())
-                else:
-                    logits = self.ffn(hidden_states)
+                logits = self.ffn(hidden_states)
             else:
                 if self.config.use_ner_layer_loss == "Bio":
                     logits = self.ffn_bio(hidden_states)
@@ -246,7 +239,7 @@ class NERModel(pl.LightningModule):
                 loss_fct = focal_loss(num_classes=self.ent_tags_count)
                 loss = loss_fct(new_logits, new_labels)
 
-            if self.config.use_ner_layer_loss:
+            if self.config.use_ner_layer_loss and len(out["logits_out"]) > 1:
                 loss = torch.tensor(0.0, device=logits.device)
                 for lo_i, logits_out in enumerate(out["logits_out"][1:]):
                     new_logits = logits_out.view(-1, logits_out.shape[-1])[mask.reshape(-1) > 0]
@@ -258,9 +251,12 @@ class NERModel(pl.LightningModule):
                         bio_labels[bio_labels > self.num_ent_type] = -1 # I -> -1
                         bio_labels[bio_labels > 0] = 1 # B -> 1
                         bio_labels[bio_labels == -1] = 2 # I -> 2
-                        loss += loss_fct(new_logits, bio_labels) * 0.1
+                        loss += loss_fct(new_logits, bio_labels) * (self.config.ner_layer_weight or 0.1)
                     else:
-                        loss += loss_fct(new_logits, new_labels) * 0.1
+                        loss += loss_fct(new_logits, new_labels) * (self.config.ner_layer_weight or 0.1)
+                
+                if self.config.ner_layer_weight is not None:
+                    loss = loss / (self.config.ner_layer_weight * len(out["logits_out"][1:]) + 1)
 
             # if self.config.use_crf:
             #     new_logits = nn.utils.rnn.pad_sequence([logits[i][mask[i] == 1] for i in range(bsz)], batch_first=True).cuda()

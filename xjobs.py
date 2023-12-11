@@ -40,16 +40,15 @@ def run():
 
     thres = [0.2, 0.18, 0.15, 0.12, 0.10]
     # runner.add(dataset_config=D5, gpu=1, use_filter_focal_loss=["sum", False], use_val_same_as_test=True, seed=[42, 43, 44, 45, 46])
-    # TODO tag_marker use_filter_label_enhance in ACE04 (precision 32 in ACE04) (NLLA BIO in 04) use_fix_rate
+    # TODO use_warmup_rel use_warmup_filter
 
-    runner.add(dataset_config=D5, use_fix_rate=[True, False], use_ner_layer_loss="Bio", seed=S0)
-    # runner.add(dataset_config=D5, use_rel_loss_sum=100, use_dynamic_loss_sum=True, use_rel_na_warmup=0, seed=S2023)
-    # runner.add(dataset_config=D5, use_ner_layer_loss=[0, "Bio", True], seed=S0)
-    # runner.add(dataset_config=D5, gpu=1, use_cross_ner=True, use_ner_layer_loss=[0, "Bio"], ner_rate=2, seed=S0)
-    # runner.add(dataset_config=D5, gpu=1, use_cross_ner=True, context_window=[100, 200], seed=S0)
+    runner.add(dataset_config=D5, gpu=3, batch_size=4, rel_ner_rate=0, use_sep=True, use_warmup_rel=0, seed=S0)
+    runner.add(dataset_config=D5, gpu=3, batch_size=4, rel_ner_rate=0, use_sep=True, use_warmup_rel=0, use_warmup_filter=0, seed=S0)
+    runner.add(dataset_config=D5, gpu=3, batch_size=4, rel_ner_rate=0, use_sep=True, use_warmup_rel=0, use_filter_loss_sum=10, use_warmup_filter=0, seed=S0)
+    runner.add(dataset_config=D5, gpu=2, batch_size=4, rel_ner_rate=0, remove_ner_info=True, use_sep=True, use_warmup_rel=0, seed=S0)
+    runner.add(dataset_config=D5, gpu=2, batch_size=4, rel_ner_rate=0, remove_ner_info=True, use_sep=True, use_warmup_rel=0, use_warmup_filter=0, seed=S0)
 
     #! D4 1109
-    # runner.add(dataset_config=D4, use_fix_rate=[True, False], use_ner_layer_loss="Bio", seed=2023, data_piece=ALL)
 
     # Add tests
     runner.add_test(test_opt1=["best"], test_batch_size=1, use_thres_threshold=thres, offline =True, test_from_ckpt=T)

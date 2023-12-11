@@ -32,10 +32,11 @@ class FilterModel(pl.LightningModule):
 
         # attention_out_dim = int(self.config.model.hidden_size * float(self.config.get("use_filter_opt4", 1.0)))
         self.tag_size = len(self.config.dataset.rels) + 1
-        self.get_bio_tag_embedding = lambda d:theta.plm_model.get_input_embeddings()(torch.tensor(theta.ent_ids, device=d))
+        self.get_tag_embeddings = theta.get_tag_embeddings
+        self.get_len_embeddings = theta.get_len_embeddings
 
-        if self.config.use_length_embedding:
-            self.length_embedding = theta.length_embedding
+        # if self.config.use_length_embedding:
+        #     self.length_embedding = theta.length_embedding
         # if self.config.use_filter_attn:
 
         #     self.attn_mode = self.config.use_filter_attn[0]
@@ -162,9 +163,9 @@ class FilterModel(pl.LightningModule):
                 raise NotImplementedError("use_rel_opt2: {}".format(self.config.use_rel_opt2))
 
 
-            if self.config.use_length_embedding:
-                length_embeds = self.length_embedding(torch.tensor([ent[1] - ent[0] for ent in entities[i]], device=hidden_state.device))
-                ent_hs += length_embeds
+            # if self.config.use_length_embedding:
+            length_embeds = self.get_len_embeddings([ent[1] - ent[0] for ent in entities[i]])
+            ent_hs += length_embeds
 
             # if self.attn_opt == '1':
             #     tag_embeddings = self.word_embeddings(torch.tensor(self.rel_ids, device=hidden_state.device))
@@ -261,7 +262,7 @@ class FilterModel(pl.LightningModule):
                 scale_rate = int(self.config.use_filter_loss_sum) * 100
                 assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
                 loss_fct = focal_loss(alpha=self.config.use_focal_alpha, gamma=2, num_classes=self.tag_size, size_average=False)
-                loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 / self.loss_weight.sum() * self.tag_size
+                loss = loss_fct(logits, labels.long()) / scale_rate / self.loss_weight.sum() * self.tag_size
 
             elif self.config.use_filter_loss_sum:
                 scale_rate = int(self.config.use_filter_loss_sum)

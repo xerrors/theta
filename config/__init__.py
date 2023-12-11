@@ -95,6 +95,8 @@ class Config(SimpleConfig):
             finally:
                 os.symlink(f"{dir_name}", link, target_is_directory=True)
 
+        print("Output Dir:", self.output_dir)
+
     def parse_config(self, config_file, config_type):
         with open(config_file, 'r') as f:
             config = yaml.load(f, Loader=yaml.FullLoader)

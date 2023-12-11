@@ -95,12 +95,13 @@ class REModel(pl.LightningModule):
         hidden_size = config.model.hidden_size
 
         self.classifier = MultiNonLinearClassifier(hidden_size * 3, len(self.rel_ids), layers_num=self.config.rel_mlp_layer_num)
+        self.get_len_embeddings = theta.get_len_embeddings
 
         if self.config.use_rel_attn:
             self.decoder = RelDecoder(theta)
 
-        if self.config.use_length_embedding:
-            self.length_embedding = theta.length_embedding
+        # if self.config.use_length_embedding:
+        #     self.length_embedding = theta.length_embedding
 
         self.grt_count = 0
         self.hit_count = 0
@@ -252,6 +253,7 @@ class REModel(pl.LightningModule):
             bio_ids = bio_ids.tolist()
 
             if self.config.use_re_marker and len(entity) > 0:
+                assert False, "use_re_marker 还没有适配 sep mode"
                 entity = sorted(entity, key=lambda x: x[0])
                 ids_with_marker = ids[:entity[0][0]-sent_s+1]
                 pos_ids_with_marker = pos_ids[:entity[0][0]-sent_s+1]
@@ -425,8 +427,8 @@ class REModel(pl.LightningModule):
                     elif self.config.use_rel_opt2 == "mean":
                         if self.config.use_length_embedding:
                             ent_hidden_states.append(torch.stack([
-                                hidden_state[b, sub_s:sub_e].mean(dim=0) + self.length_embedding(torch.tensor(sub_e - sub_s, device=hidden_state.device)),
-                                hidden_state[b, obj_s:obj_e].mean(dim=0) + self.length_embedding(torch.tensor(obj_e - obj_s, device=hidden_state.device))]))
+                                hidden_state[b, sub_s:sub_e].mean(dim=0) + self.get_len_embeddings(sub_e - sub_s),
+                                hidden_state[b, obj_s:obj_e].mean(dim=0) + self.get_len_embeddings(obj_e - obj_s)]))
                         else:
                             ent_hidden_states.append(torch.stack([
                                 hidden_state[b, sub_s:sub_e].mean(dim=0),
@@ -517,10 +519,15 @@ class REModel(pl.LightningModule):
             # 1. ent hidden state
             ent_hidden_states = torch.stack(ent_hidden_states) # [ent_num, 2, hidden_size]
 
-            rel_inputs_embeds = self.bert_embeddings_with_bio_tag_embedding(
-                theta.plm_model.bert.embeddings.word_embeddings,
-                bio_tags=bio_tags,
-                input_ids=rel_input_ids)
+            if self.config.use_sep:
+                word_embeddings = theta.plm_2.bert.embeddings.word_embeddings(rel_input_ids)
+                tag_embeddings = theta.get_tag_embeddings(bio_tags)
+                rel_inputs_embeds = word_embeddings + tag_embeddings
+            else:
+                rel_inputs_embeds = self.bert_embeddings_with_bio_tag_embedding(
+                    theta.plm_model.bert.embeddings.word_embeddings,
+                    bio_tags=bio_tags,
+                    input_ids=rel_input_ids)
 
             # if self.config.use_bio_embed:
             #     rel_inputs_embeds = self.bert_embeddings_with_bio_tag_embedding(
@@ -532,7 +539,7 @@ class REModel(pl.LightningModule):
             #     assert rel_input_ids is not None
 
             # 2. 重新计算 hidden state
-            plm_model = theta.plm_model_for_re if self.config.use_two_plm else theta.plm_model
+            plm_model = theta.plm_2 if self.config.use_sep else theta.plm_model
             outputs = plm_model(
                         input_ids=None, # rel_input_ids if not self.config.use_bio_embed else None, # torch.Size([8, 607])
                         inputs_embeds=rel_inputs_embeds,
@@ -545,6 +552,7 @@ class REModel(pl.LightningModule):
             # attention
             sent_mask = torch.where(rel_attention_mask_pad == 1, 1.0, 0.0).to(device)
             if self.config.use_rel_attn:
+                assert False, "use_rel_attn 暂时不可用"
                 max_sent_len = (rel_attention_mask_pad == 1).sum(dim=-1).max().item()
                 sent_mask_attn = sent_mask[:, :max_sent_len]
                 rel_sent_hs = rel_stage_hs * (rel_attention_mask_pad == 1).unsqueeze(-1).to(device)
@@ -828,7 +836,7 @@ class REModel(pl.LightningModule):
 
                 assert scale_rate > 0, "use_rel_loss_sum 参数错误"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device))
-                rel_loss = loss_fct(new_logits, new_labels) / scale_rate / self.config.batch_size * 16
+                rel_loss = loss_fct(new_logits, new_labels) / scale_rate
             else:
                 loss_fct = nn.CrossEntropyLoss(reduction='mean', weight=self.loss_weight.to(logits.device))
                 rel_loss = loss_fct(new_logits, new_labels)

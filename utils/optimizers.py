@@ -16,25 +16,28 @@ def get_optimizer(theta, config):
 
     model_lr = config.get("model_lr", config.lr)
     # task_lr = config.get("task_lr", config.lr)
-    decoder_lr = config.get("decoder_lr", config.lr)
+    # decoder_lr = config.get("decoder_lr", config.lr)
     # filter_lr = config.get("filter_lr", task_lr)
     # ner_lr = config.get("ner_lr", task_lr)
     # rel_lr = config.get("rel_lr", task_lr)
     filter_lr = config.lr * config.filter_lr
     ner_lr = config.lr * config.ner_lr
     rel_lr = config.lr * config.rel_lr
+    # embed_lr = config.lr * (config.embed_lr or 1.0)
 
     added_list = []
     optimizer_group_parameters = []
     optimizer_group_parameters.extend(get_params(theta, name="plm_model", lr=model_lr))
     added_list.append("plm_model")
+    
+    optimizer_group_parameters.extend(get_params(theta, name="plm_2", lr=model_lr))
+    added_list.append("plm_2")
 
     optimizer_group_parameters.extend(get_params(theta, name="filter", lr=filter_lr))
     added_list.append("filter")
 
-    # if config.use_span_ner:
-    #     optimizer_group_parameters.extend(get_params(theta, name="span_ner", lr=task_lr))
-    #     added_list.append("span_ner")
+    # optimizer_group_parameters.extend(get_params(theta, name="embeddings", lr=filter_lr))
+    # added_list.append("embeddings")
 
     if config.use_ner != "lmhead":
         optimizer_group_parameters.extend(get_params(theta, name="ner_model", lr=ner_lr))
@@ -44,7 +47,7 @@ def get_optimizer(theta, config):
         optimizer_group_parameters.extend(get_params(theta, name="rel_model", lr=rel_lr))
         added_list.append("rel_model")
 
-    optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=added_list))
+    optimizer_group_parameters.extend(get_params(theta, name=None, lr=config.lr, added_list=added_list))
 
     if config.optimizer == "Lion":
         for group in optimizer_group_parameters:

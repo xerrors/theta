@@ -26,14 +26,24 @@ class Theta(pl.LightningModule):
         self.config = config
         self.tokenizer = data.tokenizer
 
-        ModelClass = getBertForMaskedLMClass(config.model)
-        self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
+        # Others
+        self.rel_num = len(config.dataset.rels)
+        self.ent_num = len(config.dataset.ents)
+        self.na_idx = data.rel2id.get(config.dataset.na_label, None)
 
-        if self.config.use_length_embedding:
+        ModelClass = getBertForMaskedLMClass(config.model)
+
+        if self.config.use_sep:
+            self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path)
+            self.plm_2 = ModelClass.from_pretrained(config.model.model_name_or_path)
+            self.rel_embeddings = nn.Embedding(self.rel_num + 1, config.model.hidden_size)
+            self.tag_embeddings = nn.Embedding(self.ent_num * 2 + 1, config.model.hidden_size)
+            self.length_embedding = nn.Embedding(512, config.model.hidden_size)
+        
+        else:
+            self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
             self.length_embedding = nn.Embedding(512, config.model.hidden_size)
 
-        # if config.use_two_plm:
-        #     self.plm_model_for_re = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
 
         # 常用参数
         self.lr = config.lr
@@ -42,11 +52,6 @@ class Theta(pl.LightningModule):
 
         self.bce_loss_fn = nn.BCEWithLogitsLoss(reduction='none')
 
-        # Others
-        self.rel_num = len(config.dataset.rels)
-        self.ent_num = len(config.dataset.ents)
-        self.na_idx = data.rel2id.get(config.dataset.na_label, None)
-        self.cur_doc_id = 0
         self.cur_mode = 'train'
 
         # 模型评估
@@ -54,8 +59,33 @@ class Theta(pl.LightningModule):
         self.test_f1 = 0
         self.test_f1_plus = 0
         # self.eval_fn = partial(f1_score, rel_num=config.dataset.rel_num, na_idx=self.na_idx)
-        self.extand_and_init_additional_tokens()
+        if self.config.use_sep:
+            self.rel_ids = [i for i in range(self.rel_num + 1)]
+            self.ent_ids = [i for i in range(self.ent_num * 2 + 1)]
+            self.extend_and_init_sep_additional_tokens()
+        else:
+            self.extand_and_init_additional_tokens()
+
         self.register_components()
+
+    def extend_and_init_sep_additional_tokens(self):
+        config = self.config
+        ents = config.dataset.ents
+        tag_tokens = [f"[S-{e}]" for e in ents] + [f"[E-{e}]" for e in ents]
+        self.tag_ids = self.tokenizer.convert_tokens_to_ids(tag_tokens)
+
+        with torch.no_grad():
+
+            embeds = self.plm_2.get_input_embeddings().weight # type: ignore
+
+            ace_tag_ids = []
+            ace_rel_map, ace_ent_map, tag_map = get_language_map_dict()
+            for (idx, ent) in enumerate(ents):
+                ace_tag_ids.insert(idx, self.tokenizer.encode("start " + ace_ent_map[ent], add_special_tokens=False))
+                ace_tag_ids.append(self.tokenizer.encode("end " + ace_ent_map[ent], add_special_tokens=False))
+
+            for i, tag_id in enumerate(self.tag_ids):
+                embeds[tag_id] = embeds[ace_tag_ids[i]].mean(dim=-2) # type: ignore
 
     def extand_and_init_additional_tokens(self):
         """扩展并初始化额外的 token"""
@@ -73,8 +103,8 @@ class Theta(pl.LightningModule):
         ent_tokens = ["[O]"] + [f"[B-{e}]" for e in ents] + [f"[I-{e}]" for e in ents]
         special_tokens = ["[RC]"]
 
-        if config.use_normal_tag:
-            tag_tokens +=["[SS]", "[OS]", "[SE]", "[OE]"]
+        # if config.use_normal_tag:
+        #     tag_tokens +=["[SS]", "[OS]", "[SE]", "[OE]"]
 
         # 扩展词表
         special_tokens_dict = {'additional_special_tokens': rel_tokens + ent_tokens + tag_tokens + special_tokens}
@@ -285,19 +315,6 @@ class Theta(pl.LightningModule):
         if self.config.use_ner_hs:
             hidden_state = ner_out[2]
         entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
-
-        # add entities to graph
-        # if self.graph is not None:
-        #     for b, entity in enumerate(entities):
-        #         cur_doc_id = pos[b][4]
-        #         if self.cur_doc_id != cur_doc_id or self.cur_mode != mode:
-        #             self.cur_doc_id = cur_doc_id
-        #             self.cur_mode = mode
-        #             self.graph.reset()
-
-        #         for e in entity:
-        #             embedding = hidden_state[b, e[0]:e[1]].mean(dim=0).detach().clone()  # or max
-        #             self.graph.add_node(name="ent", embedding=embedding, ent_type=e[2], node_type='entity')
 
         output["gold_entities"] = entities
         output["ner_logits"] = ner_logits
@@ -522,11 +539,21 @@ class Theta(pl.LightningModule):
             self.log(k, v, **kwargs)
 
 
-    def get_rel_tag_embeddings(self, with_na=False, with_grad=True, device=None):
-        device = device or self.device
-        rel_tag_embeddings = self.plm_model.get_input_embeddings().weight[torch.tensor(self.rel_ids, device=self.device)]
-        if not with_na:
-            rel_tag_embeddings = rel_tag_embeddings[1:]
-        if not with_grad:
-            rel_tag_embeddings = rel_tag_embeddings.detach()
-        return rel_tag_embeddings
+    # def get_rel_tag_embeddings(self, with_na=False, with_grad=True, device=None):
+    #     device = device or self.device
+    #     rel_tag_embeddings = self.plm_model.get_input_embeddings().weight[torch.tensor(self.rel_ids, device=self.device)]
+    #     if not with_na:
+    #         rel_tag_embeddings = rel_tag_embeddings[1:]
+    #     if not with_grad:
+    #         rel_tag_embeddings = rel_tag_embeddings.detach()
+    #     return rel_tag_embeddings
+
+
+    def get_tag_embeddings(self, t):
+        return self.tag_embeddings(torch.tensor(t, device=self.device))
+    
+    def get_rel_embeddings(self, r):
+        return self.rel_embeddings(torch.tensor(r, device=self.device))
+    
+    def get_len_embeddings(self, l):
+        return self.length_embedding(torch.tensor(l, device=self.device))

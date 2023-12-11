@@ -84,7 +84,7 @@ use_thres_threshold: 0.0001
 ent_attn_layer_num: 3
 ent_mlp_layer_num: 2
 filter_mlp_layer_num: 1
-use_ner_layer_loss: "bio"
+use_ner_layer_loss: True
 
 # lota
 use_ent_tag_cross_attn: True
