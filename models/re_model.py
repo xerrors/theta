@@ -435,7 +435,7 @@ class REModel(pl.LightningModule):
                     #     ent_hs = torch.stack([
                     #         hidden_state[b, sub_s:sub_e].mean(dim=0),
                     #         hidden_state[b, obj_s:obj_e].mean(dim=0)])
-                    #     ent_bio_embeds = theta.plm_model.bert.embeddings.word_embeddings(torch.tensor([ss_bio_id, os_bio_id], device=device))
+                    #     ent_bio_embeds = theta.plm_model.embeddings.word_embeddings(torch.tensor([ss_bio_id, os_bio_id], device=device))
                     #     ent_hidden_states.append(ent_hs / 2 + ent_bio_embeds / 2)
                     elif self.config.use_rel_opt2 == "head" or not self.config.use_rel_opt2: # default head
                         ent_hidden_states.append(torch.stack([
@@ -518,13 +518,13 @@ class REModel(pl.LightningModule):
             ent_hidden_states = torch.stack(ent_hidden_states) # [ent_num, 2, hidden_size]
 
             rel_inputs_embeds = self.bert_embeddings_with_bio_tag_embedding(
-                theta.plm_model.bert.embeddings.word_embeddings,
+                theta.plm_model.embeddings.word_embeddings,
                 bio_tags=bio_tags,
                 input_ids=rel_input_ids)
 
             # if self.config.use_bio_embed:
             #     rel_inputs_embeds = self.bert_embeddings_with_bio_tag_embedding(
-            #         theta.plm_model.bert.embeddings.word_embeddings,
+            #         theta.plm_model.embeddings.word_embeddings,
             #         bio_tags=bio_tags,
             #         input_ids=rel_input_ids)
             # else:
@@ -532,14 +532,24 @@ class REModel(pl.LightningModule):
             #     assert rel_input_ids is not None
 
             # 2. 重新计算 hidden state
+
             plm_model = theta.plm_model_for_re if self.config.use_two_plm else theta.plm_model
+            if self.config.use_rel_prompt:
+                batch_size = input_ids.shape[0]
+                past_key_values = theta.get_prompt(stage="rel", batch_size=batch_size)
+                prefix_attention_mask = torch.ones(batch_size, rel_attention_mask.shape[-1], theta.prompt_len).to(plm_model.device)
+                rel_attention_mask = torch.cat((prefix_attention_mask, rel_attention_mask), dim=2)
+            else:
+                past_key_values = None
+
             outputs = plm_model(
                         input_ids=None, # rel_input_ids if not self.config.use_bio_embed else None, # torch.Size([8, 607])
                         inputs_embeds=rel_inputs_embeds,
                         attention_mask=rel_attention_mask, # torch.Size([8, 607, 607])
                         position_ids=rel_positional_ids, # torch.Size([8, 607]),
                         token_type_ids = torch.zeros(rel_input_ids.shape[:2], dtype=torch.long, device=device),
-                        output_hidden_states=True)
+                        output_hidden_states=True,
+                        past_key_values=past_key_values)
             rel_stage_hs = outputs.hidden_states[-1]
 
             # attention

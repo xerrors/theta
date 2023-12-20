@@ -74,6 +74,7 @@ class FilterModel(pl.LightningModule):
             self.sent_proj = nn.Linear(hidden_size, hidden_size)
             self.filter_entity_pair_net = MultiNonLinearClassifier(
                 hidden_size * 3,
+                layers_num=self.config.filter_mlp_layer_num or 1,
                 dropout_rate=dropout_rate,
                 hidden_dim=None,
                 tag_size=self.tag_size)
@@ -192,7 +193,7 @@ class FilterModel(pl.LightningModule):
             ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
 
             if self.config.use_filter_sent_hs:
-                sent_hs = self.sent_proj(hidden_state[i][0])
+                sent_hs = hidden_state[i][0]
                 sent_hs = sent_hs.unsqueeze(0).repeat(ent_num, ent_num, 1)
                 ent_hs_pair = torch.cat([sent_hs, ent_hs_x, ent_hs_y], dim=-1)
                 ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)

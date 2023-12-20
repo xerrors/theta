@@ -55,6 +55,7 @@ def main(func_mode=False, **kwargs):
         auto_lr_find=config.auto_lr,
         default_root_dir=config.output_dir,
         logger=configure_logger(config),
+        profiler="advanced"
     )
 
     # 加载 checkpoint 测试

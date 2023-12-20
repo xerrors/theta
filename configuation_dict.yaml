@@ -77,3 +77,7 @@ use_filter_proj_norm: ProjNorm
 use_cross_ner: CrossE
 use_dynamic_loss_sum: DynSum
 rel_max_len: RMax
+
+use_2_plm: Sep
+use_ner_prompt: NERPrompt
+use_rel_prompt: RELPrompt

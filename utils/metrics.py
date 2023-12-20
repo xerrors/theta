@@ -19,6 +19,9 @@ def f1_score(outputs, pred_name, gold_name, slice=None):
             pred_triples = set(val_out[pred_name])
             gold_triples = set(val_out[gold_name])
 
+        if len(gold_triples) != len(val_out[gold_name]):
+            print(f"len(gold_triples)({len(gold_triples)}) != len(val_out[gold_name])({len(val_out[gold_name])})")
+
         pred += len(pred_triples)
         gold += len(gold_triples)
         correct += len(set(pred_triples) & set(gold_triples))

@@ -1,4 +1,3 @@
-from concurrent.futures import ALL_COMPLETED
 import os
 os.environ['CURL_CA_BUNDLE'] = '' # 真是闹了鬼了 https://github.com/huggingface/transformers/issues/17611#issuecomment-1323272726
 from main import main
@@ -42,17 +41,17 @@ def run():
     # runner.add(dataset_config=D5, gpu=1, use_filter_focal_loss=["sum", False], use_val_same_as_test=True, seed=[42, 43, 44, 45, 46])
     # TODO tag_marker use_filter_label_enhance in ACE04 (precision 32 in ACE04) (NLLA BIO in 04) use_fix_rate
 
-    runner.add(dataset_config=D5, use_fix_rate=[True, False], use_ner_layer_loss="Bio", seed=S0)
-    # runner.add(dataset_config=D5, use_rel_loss_sum=100, use_dynamic_loss_sum=True, use_rel_na_warmup=0, seed=S2023)
-    # runner.add(dataset_config=D5, use_ner_layer_loss=[0, "Bio", True], seed=S0)
-    # runner.add(dataset_config=D5, gpu=1, use_cross_ner=True, use_ner_layer_loss=[0, "Bio"], ner_rate=2, seed=S0)
-    # runner.add(dataset_config=D5, gpu=1, use_cross_ner=True, context_window=[100, 200], seed=S0)
+    # runner.add(dataset_config=D5, ent_attn_range=0, seed=S0)
+    # runner.add(dataset_config=D5, ner_rate=[1,2], mean_loss=[True, False], no_na_in_tag_embedding=True, seed=S0)
 
     #! D4 1109
-    # runner.add(dataset_config=D4, use_fix_rate=[True, False], use_ner_layer_loss="Bio", seed=2023, data_piece=ALL)
+    runner.add(dataset_config=D4, prompt_len=300, use_rel_prompt=True, use_ner_prompt=True, mean_loss=True, use_warmup_rel=0, use_warmup_filter=0, use_rel_ner=0, context_window=300, seed=2023, data_piece=ALL)
+    # runner.add(dataset_config=D4, seed=2023, data_piece=ALL)
+    # runner.add(dataset_config=D4, warmup=0, seed=2023, data_piece=ALL)
+
 
     # Add tests
-    runner.add_test(test_opt1=["best"], test_batch_size=1, use_thres_threshold=thres, offline =True, test_from_ckpt=T)
+    runner.add_test(test_opt1=["best"], test_batch_size=1, use_thres_threshold=thres, offline=True, test_from_ckpt=T)
 
     runner.run(main,
                before_run_hook=before_run_hook,
@@ -96,7 +95,13 @@ def before_run_hook(lists, **kwargs):
         else:
             f_lists.append(item)
 
-    lists = sorted(f_lists, key=lambda x: x["seed"] if x.get("seed") else 0)
+
+    if f_lists[0].get("data_piece") is not None:
+        sort_key = "data_piece"
+    else:
+        sort_key = "seed"
+
+    lists = sorted(f_lists, key=lambda x: x[sort_key] if x.get(sort_key) else 0)
     return lists
 
 def demo(name, **kwargs):

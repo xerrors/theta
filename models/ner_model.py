@@ -20,26 +20,6 @@ class EntAttentionLayer(nn.Module):
         super().__init__()
         self.config = config
         self.word_embeddings_fc = word_embeddings_fc
-        # self.self_attn = nn.MultiheadAttention(embed_dim, num_heads=4, dropout=0.1, batch_first=True)
-        # self.self_ouput = nn.Sequential(
-        #     nn.Linear(embed_dim, embed_dim),
-        #     nn.Dropout(0.1))
-        # self.self_norm = nn.LayerNorm(embed_dim)
-
-        # self.cross_attn = nn.MultiheadAttention(embed_dim, num_heads=4, dropout=0.1, batch_first=True)
-        # self.cross_output = nn.Sequential(
-        #     nn.Linear(embed_dim, embed_dim),
-        #     nn.Dropout(0.1))
-        # self.cross_norm = nn.LayerNorm(embed_dim)
-
-        # #     nn.Linear(embed_dim, embed_dim),
-        # #     nn.GELU(),
-        # #     nn.Dropout(0.1),
-        # #     nn.Linear(embed_dim, embed_dim),
-        # # )
-        # self.layer_norm_1 = nn.LayerNorm(embed_dim)
-        # self.layer_norm_2 = nn.LayerNorm(embed_dim)
-        # self.layer_norm_3 = nn.LayerNorm(embed_dim)
         self.attention = BertAttention(config=self.config.model)
         self.crossattention = BertAttention(config=self.config.model)
         self.intermediate = BertIntermediate(config=self.config.model)
@@ -59,9 +39,9 @@ class EntAttentionLayer(nn.Module):
         tag_embeddings = self.word_embeddings_fc()(torch.tensor(self.ent_ids, device=hidden_states.device))
         tag_embeddings = tag_embeddings.unsqueeze(0).repeat(hidden_states.shape[0], 1, 1)
 
-        if self.ent_range:
+        if self.ent_range > 0:
             attn_mask = torch.ones(hidden_states.shape[1], hidden_states.shape[1], device=hidden_states.device)
-            attn_mask = torch.tril(attn_mask, diagonal=self.ent_range) * torch.triu(attn_mask, diagonal=-self.ent_range)
+            attn_mask = torch.tril(attn_mask, diagonal=self.ent_range) * torch.triu(attn_mask, diagonal=-self.ent_range) # 20
         else:
             attn_mask = None
 
@@ -105,14 +85,14 @@ class EntDecoder(nn.Module):
         hidden_size = config.model.hidden_size
         tag_size = len(self.ent_ids)
 
-        self.ffn = MultiNonLinearClassifier(hidden_size, tag_size, layers_num=self.config.ent_mlp_layer_num)
+        self.ffn = MultiNonLinearClassifier(hidden_size, tag_size, layers_num=self.config.ent_mlp_layer_num) # 2
         self.ffn_bio = MultiNonLinearClassifier(hidden_size, 3)
         self.attn = nn.ModuleList([
             EntAttentionLayer(config, theta.plm_model.get_input_embeddings, self.ent_ids)
-            for _ in range(config.ent_attn_layer_num)])
+            for _ in range(config.ent_attn_layer_num)]) # 3
 
-        if self.config.use_ner == "embed":
-            self.get_bio_tag_embedding = lambda d:theta.plm_model.get_input_embeddings()(torch.tensor(self.ent_ids, device=d))
+        # if self.config.use_ner == "embed":
+        #     self.get_bio_tag_embedding = lambda d:theta.plm_model.get_input_embeddings()(torch.tensor(self.ent_ids, device=d))
 
     def forward(self, hidden_states):
         """
@@ -127,18 +107,18 @@ class EntDecoder(nn.Module):
 
         for li, layer in enumerate(self.attn):
             hidden_states = layer(hidden_states)
-            # logits = self.ffn(hidden_states)
+            logits = self.ffn(hidden_states)
 
-            if li == len(self.attn) - 1:
-                if self.config.use_ner == "embed":
-                    logits = torch.matmul(hidden_states, self.get_bio_tag_embedding(hidden_states.device).t())
-                else:
-                    logits = self.ffn(hidden_states)
-            else:
-                if self.config.use_ner_layer_loss == "Bio":
-                    logits = self.ffn_bio(hidden_states)
-                else:
-                    logits = self.ffn(hidden_states)
+            # if li == len(self.attn) - 1:
+            #     # if self.config.use_ner == "embed":
+            #     #     logits = torch.matmul(hidden_states, self.get_bio_tag_embedding(hidden_states.device).t())
+            #     # else:
+            #     logits = self.ffn(hidden_states)
+            # else:
+            #     if self.config.use_ner_layer_loss == "Bio":
+            #         logits = self.ffn_bio(hidden_states)
+            #     else:
+            #         logits = self.ffn(hidden_states)
 
             output["logits"] = logits
             output["logits_out"].append(logits)
@@ -242,23 +222,23 @@ class NERModel(pl.LightningModule):
             new_labels = labels.reshape(-1).long()[mask.reshape(-1) > 0]
             loss = loss_fct(new_logits, new_labels)
 
-            if self.config.use_ner_focal_loss:
+            if self.config.use_ner_focal_loss: # default: False
                 loss_fct = focal_loss(num_classes=self.ent_tags_count)
                 loss = loss_fct(new_logits, new_labels)
 
-            if self.config.use_ner_layer_loss:
+            if self.config.use_ner_layer_loss: # default: True
                 loss = torch.tensor(0.0, device=logits.device)
                 for lo_i, logits_out in enumerate(out["logits_out"][1:]):
                     new_logits = logits_out.view(-1, logits_out.shape[-1])[mask.reshape(-1) > 0]
 
                     if lo_i == len(out["logits_out"][1:]) - 1:
                         loss += loss_fct(new_logits, new_labels)
-                    elif self.config.use_ner_layer_loss == "Bio":
-                        bio_labels = new_labels.clone()
-                        bio_labels[bio_labels > self.num_ent_type] = -1 # I -> -1
-                        bio_labels[bio_labels > 0] = 1 # B -> 1
-                        bio_labels[bio_labels == -1] = 2 # I -> 2
-                        loss += loss_fct(new_logits, bio_labels) * 0.1
+                    # elif self.config.use_ner_layer_loss == "Bio":
+                    #     bio_labels = new_labels.clone()
+                    #     bio_labels[bio_labels > self.num_ent_type] = -1 # I -> -1
+                    #     bio_labels[bio_labels > 0] = 1 # B -> 1
+                    #     bio_labels[bio_labels == -1] = 2 # I -> 2
+                    #     loss += loss_fct(new_logits, bio_labels) * 0.1
                     else:
                         loss += loss_fct(new_logits, new_labels) * 0.1
 

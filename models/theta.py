@@ -1,9 +1,11 @@
 # import math
 # from re import T
 # from numpy import tri
+from sys import prefix
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
+from models.components import PrefixEncoder
 # from models.batch_filter import batch_filter
 from models.entity_pair_filter import FilterModel
 # from models.pre_relation import PreREModel
@@ -26,19 +28,30 @@ class Theta(pl.LightningModule):
         self.config = config
         self.tokenizer = data.tokenizer
 
-        ModelClass = getBertForMaskedLMClass(config.model)
-        self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
-
-        if self.config.use_length_embedding:
-            self.length_embedding = nn.Embedding(512, config.model.hidden_size)
-
-        # if config.use_two_plm:
-        #     self.plm_model_for_re = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
-
         # 常用参数
         self.lr = config.lr
         self.batch_size = config.batch_size
         self.hidden_size = config.model.hidden_size
+
+        ModelClass = getBertForMaskedLMClass(config.model)
+        self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
+
+        self.length_embedding = nn.Embedding(512, config.model.hidden_size)
+        self.dropout = torch.nn.Dropout(config.model.hidden_dropout_prob)
+
+        if self.config.use_ner_prompt or self.config.use_rel_prompt:
+            self.prompt_len = config.prompt_len or 100
+            self.n_layer = config.model.num_hidden_layers
+            self.n_head = config.model.num_attention_heads
+            self.n_embd = config.model.hidden_size // config.model.num_attention_heads
+            self.prefix_tokens = torch.arange(self.prompt_len).long()
+
+            if self.config.use_ner_prompt:
+                self.ner_prefix_encoder = PrefixEncoder(self.n_layer, self.prompt_len, self.hidden_size, self.hidden_size)
+
+            if self.config.use_rel_prompt:
+                self.rel_prefix_encoder = PrefixEncoder(self.n_layer, self.prompt_len, self.hidden_size, self.hidden_size)
+
 
         self.bce_loss_fn = nn.BCEWithLogitsLoss(reduction='none')
 
@@ -56,6 +69,28 @@ class Theta(pl.LightningModule):
         # self.eval_fn = partial(f1_score, rel_num=config.dataset.rel_num, na_idx=self.na_idx)
         self.extand_and_init_additional_tokens()
         self.register_components()
+
+    def get_prompt(self, stage, batch_size):
+
+        if stage == "ner":
+            prefix_encoder = self.ner_prefix_encoder
+        elif stage == "rel":
+            prefix_encoder = self.rel_prefix_encoder
+        else:
+            raise ValueError("stage must be one of [ner, rel]")
+
+        prefix_tokens = self.prefix_tokens.unsqueeze(0).expand(batch_size, -1).to(self.plm_model.device)
+        past_key_values = prefix_encoder(prefix_tokens)
+        past_key_values = past_key_values.view(
+            batch_size,
+            self.prompt_len,
+            self.n_layer * 2,
+            self.n_head,
+            self.n_embd
+        )
+        past_key_values = self.dropout(past_key_values)
+        past_key_values = past_key_values.permute([2, 0, 3, 1, 4]).split(2)
+        return past_key_values
 
     def extand_and_init_additional_tokens(self):
         """扩展并初始化额外的 token"""
@@ -250,7 +285,16 @@ class Theta(pl.LightningModule):
 
         # Forward
         input_ids, attention_mask, pos, triples, ent_maps, sent_mask, span_mask = batch
-        outputs = self.plm_model(input_ids, attention_mask=attention_mask, output_hidden_states=True) # type: ignore
+
+        if self.config.use_ner_prompt:
+            batch_size = input_ids.shape[0]
+            past_key_values = self.get_prompt(stage="ner", batch_size=batch_size)
+            prefix_attention_mask = torch.ones(batch_size, self.prompt_len).to(self.plm_model.device)
+            attention_mask = torch.cat((prefix_attention_mask, attention_mask), dim=1)
+        else:
+            past_key_values = None
+
+        outputs = self.plm_model(input_ids, attention_mask=attention_mask, output_hidden_states=True, past_key_values=past_key_values) # type: ignore
 
         # 一些参数
         hidden_state = outputs.hidden_states[-1]
@@ -283,7 +327,7 @@ class Theta(pl.LightningModule):
         ner_out = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask, return_hs=(self.config.use_ner_hs))
         ner_logits, ner_loss = ner_out[0], ner_out[1]
         if self.config.use_ner_hs:
-            hidden_state = ner_out[2]
+            hidden_state = ner_out[2][-1]
         entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
 
         # add entities to graph
@@ -356,13 +400,16 @@ class Theta(pl.LightningModule):
 
             loss = ner_loss * ner_rate + rel_loss * rel_rate + filter_loss * filter_rate + sent_ner_loss * rel_ner_rate
 
+            if self.config.mean_loss:
+                loss /= (ner_rate + rel_rate + filter_rate + rel_ner_rate)
+
             # stop_grad
-            if self.config.loss_stop_grad:
-                ner_rate = 1 / (ner_loss.detach().item() + 1e-8) * ner_rate
-                rel_rate = 1 / (rel_loss.detach().item() + 1e-8) * rel_rate
-                filter_rate = 1 / (filter_loss.detach().item() + 1e-8) * filter_rate
-                rel_ner_rate = 1 / (sent_ner_loss.detach().item() + 1e-8) * rel_ner_rate
-                loss = ner_loss * ner_rate + rel_loss * rel_rate + filter_loss * filter_rate + sent_ner_loss * rel_ner_rate
+            # if self.config.loss_stop_grad:
+            #     ner_rate = 1 / (ner_loss.detach().item() + 1e-8) * ner_rate
+            #     rel_rate = 1 / (rel_loss.detach().item() + 1e-8) * rel_rate
+            #     filter_rate = 1 / (filter_loss.detach().item() + 1e-8) * filter_rate
+            #     rel_ner_rate = 1 / (sent_ner_loss.detach().item() + 1e-8) * rel_ner_rate
+            #     loss = ner_loss * ner_rate + rel_loss * rel_rate + filter_loss * filter_rate + sent_ner_loss * rel_ner_rate
 
             self.log("loss/ner_loss", ner_loss)
             self.log("loss/rel_loss", rel_loss)

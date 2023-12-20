@@ -163,10 +163,8 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
 
 
             if config.use_cross_ner:
-
-                ner_all = sent.ner + ner_left + ner_right
                 added_text = []
-                for ner in ner_all:
+                for ner in sent.ner + ner_left + ner_right:
 
                     text = " ".join(ner.span.text)
                     if text in added_text:
@@ -205,10 +203,6 @@ def convert_dataset_to_samples(dataset, config, tokenizer, is_test=False):
                     ent_maps[ent_s+1:ent_e] = ner2id[ner.label] + len(ner2id) + 1 # len(ner2id) + 1 表示 I, len(ner2id) == 7
                     ent_maps_2d[ent_s, ent_e] = ner2id[ner.label] + 1 # 左闭右开
                     assert ent_s < ent_e
-
-                    # if ner.span not in added:
-                    #     ner_total_len += ent_e - ent_s
-                    #     added.append(ner.span)
 
                     ent_type[(ent_s, ent_e)] = ner2id[ner.label]
 
