@@ -12,6 +12,8 @@ import utils
 from data.data_module import DataModule
 from xerrors import cprint
 
+import logging
+
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
@@ -53,6 +55,7 @@ def main(func_mode=False, **kwargs):
         auto_lr_find=config.auto_lr,
         default_root_dir=config.output_dir,
         logger=configure_logger(config),
+        profiler="advanced"
     )
 
     # 加载 checkpoint 测试
@@ -76,22 +79,24 @@ def main(func_mode=False, **kwargs):
         config.save_best_model_path(model_checkpoint.best_model_path)
         config.save_config()
 
-        trainer.test(theta, datamodule=data)
-        wandb.finish()
+        # trainer.test(theta, datamodule=data)
+        trainer.test(theta, datamodule=data, ckpt_path=model_checkpoint.best_model_path)
+        wandb.finish(quiet=True)
 
     result = {
-        "best_model_path": model_checkpoint.best_model_path,
+        # "best_model_path": model_checkpoint.best_model_path,
         "best_f1": theta.best_f1,
         "test_f1": theta.test_f1,
+        "test_f1*": theta.test_f1_plus,
         "test_p": theta.test_p,
         "test_r": theta.test_r,
         "ner_f1": theta.ner_f1,
-        "ner_p": theta.ner_p,
-        "ner_r": theta.ner_r,
+        # "ner_p": theta.ner_p,
+        # "ner_r": theta.ner_r,
         "rel_f1": theta.rel_f1,
-        "rel_p": theta.rel_p,
-        "rel_r": theta.rel_r,
-        "final_config": config.final_config
+        # "rel_p": theta.rel_p,
+        # "rel_r": theta.rel_r,
+        # "final_config": config.final_config
     }
 
     config.save_result(result)
@@ -101,18 +106,18 @@ def main(func_mode=False, **kwargs):
 def configure_logger(config):
     """ TensorBoardLogger (offline) or WandbLogger (Online) """
 
-    if config.wandb:
-        logger = pl.loggers.WandbLogger( # type: ignore
-            project="theta",
-            name=config.tag,
-            save_dir=config.output_dir,
-            offline=config.offline)
-        logger.log_hyperparams(config)
-    else:
-        logger = pl.loggers.TensorBoardLogger( # type: ignore
-            name=config.tag,
-            save_dir=os.path.join(config.output_dir, "tensorboard"))
+    logging.getLogger("lightning").setLevel(logging.WARNING)
+    logging.getLogger("pytorch_lightning").setLevel(logging.WARNING)
+    logging.getLogger("wandb").setLevel(logging.WARNING)
+    logger = pl.loggers.WandbLogger( # type: ignore
+        project="Filter",
+        name=config.tag,
+        save_dir=config.output_dir,
+        offline=config.offline,
+        reinit=True,
+        save_code=True,)
 
+    logger.log_hyperparams(config)
     return logger
 
 

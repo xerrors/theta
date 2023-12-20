@@ -3,7 +3,7 @@ rel_num: 6
 data_dir: datasets/ace2005
 na_label: None
 train: datasets/ace2005/json/train.json
-val: datasets/ace2005/json/dev.json
+val: datasets/ace2005/json/test.json
 test: datasets/ace2005/json/test.json
 rels: ['ART', 'ORG-AFF', 'GEN-AFF', 'PHYS', 'PER-SOC', 'PART-WHOLE']
 ents: ['FAC', 'WEA', 'LOC', 'VEH', 'GPE', 'ORG', 'PER']

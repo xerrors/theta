@@ -1,0 +1,83 @@
+# Basic
+max_epochs: E
+lr: LR
+ner_lr: NLR
+rel_lr: RLR
+filter_lr: FLR
+batch_size: BS
+test_batch_size: TBS
+global_batch_size: GBS
+max_seq_len: MaxLen
+optimizer: Opt
+# use ner
+use_ner: NER
+ent_attn_layer_num: AttnL
+ent_mlp_layer_num: MLPL
+use_ent_bio_input: BioIn
+ent_attn_range: AttnR
+use_ner_layer_loss: NLLa
+# use rel
+use_rel: REL
+use_rel_opt1: R1
+use_rel_opt2: R2
+use_rel_opt3: R3
+use_rel_opt4: R4
+use_rel_ner: RN
+use_rel_loss_sum: Rsum
+use_rel_attn: RAttns
+rel_mlp_layer_num: RelMLP
+# use filter
+use_filter_opt1: F1
+use_filter_opt2: F2
+use_filter_opt4: F4
+use_filter_opt5: F5
+use_filter_opt6: F6
+use_thres_val: ThresV
+use_thres_threshold: T
+use_thres_gamma: Gamma
+use_filter_loss_sum: Fsum
+use_filter_strategy: Fstgy
+filter_dropout_rate: Fdrop
+# Task
+context_window: CW
+# Test
+test_opt1: T1
+test_opt2: T2
+test_opt3: T3
+test_opt4: T4
+use_test_rel_strict: Rel+
+# rate
+filter_rate: FR
+rel_rate: RR
+ner_rate: NR
+rel_ner_rate: RNR
+
+# test
+use_rel_na_warmup: R0Warm
+use_filter_na_warm_up: F0warm
+na_filter_weight: F0w
+rel_mlp_with_init: Init
+
+use_warmup_rel: WarmR
+use_warmup_filter: WarmF
+
+use_filter_focal_loss: FocalF
+use_rel_focal_loss: FocalR
+use_ner_focal_loss: FocalE
+
+use_pair_sort_fix: SortFix
+
+use_filter_tag: FTag
+use_negative: Neg
+use_length_embedding: LenEmb
+
+use_filter_sent_hs: FHS
+use_filter_proj_norm: ProjNorm
+
+use_cross_ner: CrossE
+use_dynamic_loss_sum: DynSum
+rel_max_len: RMax
+
+use_2_plm: Sep
+use_ner_prompt: NERPrompt
+use_rel_prompt: RELPrompt

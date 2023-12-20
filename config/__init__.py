@@ -42,7 +42,8 @@ class Config(SimpleConfig):
         ckpt = args.test_from_ckpt or kwargs.get("test_from_ckpt")
         if ckpt:
             self.load_from_ckpt(ckpt) # type: ignore
-            self.wandb = False
+            # self.wandb = False
+            self.offline = True
 
             self.ext_config = kwargs
             self.args = Namespace(**self.formatted_args) # type: ignore
@@ -65,13 +66,13 @@ class Config(SimpleConfig):
         self.__load_config_from_args()
         self.__load_config(args.config)
 
-        # 2. 加载 model 和 dataset 的配置
-        self.model = self.parse_config(self.model_config, "model")
-        self.dataset = self.parse_config(self.dataset_config, "dataset")
-
-        # 3. 从 ext_config 中加载配置
+        # 2. 从 ext_config 中加载配置
         self.__load_ext_config()
         self.__replace_config_to_args()
+
+        # 3. 加载 model 和 dataset 的配置
+        self.model = self.parse_config(self.model_config, "model")
+        self.dataset = self.parse_config(self.dataset_config, "dataset")
 
         # 4. 将配置文件保存到实验输出文件夹里面
         self.handle_config()
@@ -88,9 +89,10 @@ class Config(SimpleConfig):
         if not self.debug:
             dir_name = self.output_dir.split(os.sep)[-1]
             try:
-                os.symlink(f"{dir_name}", link, target_is_directory=True)
-            except:
                 os.remove(link)
+            except:
+                pass
+            finally:
                 os.symlink(f"{dir_name}", link, target_is_directory=True)
 
     def parse_config(self, config_file, config_type):
@@ -110,8 +112,8 @@ class Config(SimpleConfig):
         if not self.with_ext_config and not self.no_borther_confirm:
             self.tag = utils.confirm_value("tag", self.tag)
 
-            if self.debug and self.wandb:
-                self.wandb = utils.confirm_bool("wandb", self.wandb)
+            if self.debug and self.wandb and not self.offline:
+                self.offline = utils.confirm_bool("offline with wandb", self.offline)
 
         # 创建此次实验的基本信息，运行时间，输出路径
         self.start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
@@ -124,7 +126,8 @@ class Config(SimpleConfig):
 
         # 快速验证模式
         if self.fast_dev_run:
-            self.wandb = False
+            # self.wandb = False
+            self.offline = True
             print(utils.blue_background(">>> FAST DEV RUN MODE <<<"))
 
         self.test_result = os.path.join(self.output_dir, f"test-result.json")

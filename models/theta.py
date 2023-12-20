@@ -1,19 +1,21 @@
-import math
-from re import T
-from numpy import tri
+# import math
+# from re import T
+# from numpy import tri
+from sys import prefix
 import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-from models.batch_filter import batch_filter
+from models.components import PrefixEncoder
+# from models.batch_filter import batch_filter
 from models.entity_pair_filter import FilterModel
-from models.pre_relation import PreREModel
+# from models.pre_relation import PreREModel
 from models.re_model import REModel
 from models.ner_model import NERModel
-from models.runtime_graph import RuntimeGraph
+# from models.runtime_graph import RuntimeGraph
 from models.functions import getBertForMaskedLMClass
 
 from data.utils import get_language_map_dict
-from models.span_ner_model import SpanEntityModel
+# from models.span_ner_model import SpanEntityModel
 from utils.metrics import f1_score
 from utils.optimizers import get_optimizer
 
@@ -26,16 +28,30 @@ class Theta(pl.LightningModule):
         self.config = config
         self.tokenizer = data.tokenizer
 
-        ModelClass = getBertForMaskedLMClass(config.model)
-        self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
-
-        if config.use_two_plm:
-            self.plm_model_for_re = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
-
         # 常用参数
         self.lr = config.lr
         self.batch_size = config.batch_size
         self.hidden_size = config.model.hidden_size
+
+        ModelClass = getBertForMaskedLMClass(config.model)
+        self.plm_model = ModelClass.from_pretrained(config.model.model_name_or_path) # type: ignore
+
+        self.length_embedding = nn.Embedding(512, config.model.hidden_size)
+        self.dropout = torch.nn.Dropout(config.model.hidden_dropout_prob)
+
+        if self.config.use_ner_prompt or self.config.use_rel_prompt:
+            self.prompt_len = config.prompt_len or 100
+            self.n_layer = config.model.num_hidden_layers
+            self.n_head = config.model.num_attention_heads
+            self.n_embd = config.model.hidden_size // config.model.num_attention_heads
+            self.prefix_tokens = torch.arange(self.prompt_len).long()
+
+            if self.config.use_ner_prompt:
+                self.ner_prefix_encoder = PrefixEncoder(self.n_layer, self.prompt_len, self.hidden_size, self.hidden_size)
+
+            if self.config.use_rel_prompt:
+                self.rel_prefix_encoder = PrefixEncoder(self.n_layer, self.prompt_len, self.hidden_size, self.hidden_size)
+
 
         self.bce_loss_fn = nn.BCEWithLogitsLoss(reduction='none')
 
@@ -49,9 +65,32 @@ class Theta(pl.LightningModule):
         # 模型评估
         self.best_f1 = 0
         self.test_f1 = 0
+        self.test_f1_plus = 0
         # self.eval_fn = partial(f1_score, rel_num=config.dataset.rel_num, na_idx=self.na_idx)
         self.extand_and_init_additional_tokens()
         self.register_components()
+
+    def get_prompt(self, stage, batch_size):
+
+        if stage == "ner":
+            prefix_encoder = self.ner_prefix_encoder
+        elif stage == "rel":
+            prefix_encoder = self.rel_prefix_encoder
+        else:
+            raise ValueError("stage must be one of [ner, rel]")
+
+        prefix_tokens = self.prefix_tokens.unsqueeze(0).expand(batch_size, -1).to(self.plm_model.device)
+        past_key_values = prefix_encoder(prefix_tokens)
+        past_key_values = past_key_values.view(
+            batch_size,
+            self.prompt_len,
+            self.n_layer * 2,
+            self.n_head,
+            self.n_embd
+        )
+        past_key_values = self.dropout(past_key_values)
+        past_key_values = past_key_values.permute([2, 0, 3, 1, 4]).split(2)
+        return past_key_values
 
     def extand_and_init_additional_tokens(self):
         """扩展并初始化额外的 token"""
@@ -76,8 +115,8 @@ class Theta(pl.LightningModule):
         special_tokens_dict = {'additional_special_tokens': rel_tokens + ent_tokens + tag_tokens + special_tokens}
         self.tokenizer.add_special_tokens(special_tokens_dict)
         self.plm_model.resize_token_embeddings(len(self.tokenizer)) # type: ignore
-        if config.use_two_plm:
-            self.plm_model_for_re.resize_token_embeddings(len(self.tokenizer)) # type: ignore
+        # if config.use_two_plm:
+        #     self.plm_model_for_re.resize_token_embeddings(len(self.tokenizer)) # type: ignore
 
         self.rel_ids = self.tokenizer.convert_tokens_to_ids(rel_tokens)
         self.ent_ids = self.tokenizer.convert_tokens_to_ids(ent_tokens)
@@ -86,8 +125,8 @@ class Theta(pl.LightningModule):
         # 初始化关系的词向量
         with torch.no_grad():
             embeds = self.plm_model.get_input_embeddings().weight # type: ignore
-            if self.config.use_two_plm:
-                embeds_re = self.plm_model_for_re.get_input_embeddings().weight # type: ignore
+            # if self.config.use_two_plm:
+            #     embeds_re = self.plm_model_for_re.get_input_embeddings().weight # type: ignore
 
             ace_rel_map, ace_ent_map, tag_map = get_language_map_dict()
 
@@ -96,8 +135,8 @@ class Theta(pl.LightningModule):
             ace_rel_ids = [self.tokenizer.encode(ace_rel_map[rel], add_special_tokens=False) for rel in rels]
             for i, rel_id in enumerate(self.rel_ids):
                 embeds[rel_id] = embeds[ace_rel_ids[i]].mean(dim=-2) # type: ignore
-                if self.config.use_two_plm:
-                    embeds_re[rel_id] = embeds_re[ace_rel_ids[i]].mean(dim=-2) # type: ignore
+                # if self.config.use_two_plm:
+                #     embeds_re[rel_id] = embeds_re[ace_rel_ids[i]].mean(dim=-2) # type: ignore
 
             # Entity
             ace_ent_ids = [self.tokenizer.encode("outside", add_special_tokens=False)]
@@ -107,8 +146,8 @@ class Theta(pl.LightningModule):
 
             for i, ent_id in enumerate(self.ent_ids):
                 embeds[ent_id] = embeds[ace_ent_ids[i]].mean(dim=-2) # type: ignore
-                if self.config.use_two_plm:
-                    embeds_re[ent_id] = embeds_re[ace_ent_ids[i]].mean(dim=-2) # type: ignore
+                # if self.config.use_two_plm:
+                #     embeds_re[ent_id] = embeds_re[ace_ent_ids[i]].mean(dim=-2) # type: ignore
 
             # Tag
             ace_tag_ids = []
@@ -124,8 +163,8 @@ class Theta(pl.LightningModule):
 
             for i, tag_id in enumerate(self.tag_ids):
                 embeds[tag_id] = embeds[ace_tag_ids[i]].mean(dim=-2) # type: ignore
-                if self.config.use_two_plm:
-                    embeds_re[tag_id] = embeds_re[ace_tag_ids[i]].mean(dim=-2) # type: ignore
+                # if self.config.use_two_plm:
+                #     embeds_re[tag_id] = embeds_re[ace_tag_ids[i]].mean(dim=-2) # type: ignore
 
             assert (self.plm_model.get_input_embeddings().weight == embeds).all() # type: ignore
 
@@ -139,113 +178,123 @@ class Theta(pl.LightningModule):
         self.ner_model = NERModel(self)
         self.filter = FilterModel(self)
         # self.span_ner = SpanEntityModel(self)
-        self.graph = RuntimeGraph(self) if config.use_graph_layers > 0 else None
+        # self.graph = RuntimeGraph(self) if config.use_graph_layers > 0 else None
 
-        if self.config.use_pre_rel:
-            self.pre_rel_model = PreREModel(config)
+        # if self.config.use_pre_rel:
+        #     self.pre_rel_model = PreREModel(config)
+        self.graph = None
 
-    def predict_step(self, sent: str, ansser=None):
-        input_ids = self.tokenizer.encode(sent, add_special_tokens=True)
-        input_ids = torch.tensor(input_ids).unsqueeze(0).to(self.device)
-        outputs = self.plm_model(input_ids, output_hidden_states=True) # type: ignore
+    # def predict_step(self, sent: str, ansser=None):
+    #     input_ids = self.tokenizer.encode(sent, add_special_tokens=True)
+    #     input_ids = torch.tensor(input_ids).unsqueeze(0).to(self.device)
+    #     outputs = self.plm_model(input_ids, output_hidden_states=True) # type: ignore
 
-        # 一些参数
-        hidden_state = outputs.hidden_states[-1]
+    #     # 一些参数
+    #     hidden_state = outputs.hidden_states[-1]
 
-        ner_logits, _ = self.ner_model(hidden_state, graph=self.graph)
-        entities = self.ner_model.decode_entities(ner_logits, with_score=True)
+    #     ner_logits, _ = self.ner_model(hidden_state, graph=self.graph)
+    #     entities = self.ner_model.decode_entities(ner_logits, with_score=True)
 
-        # TODO The Entity Groups is not Good.
-        batch = [input_ids, None, None, None, None, None, None]
-        if sum([len(e) for e in entities]) > 0:
-            rel_output = self.rel_model(
-                                theta=self,
-                                batch=batch,
-                                hidden_state=hidden_state,
-                                entities=entities,
-                                return_loss=False,
-                                mode="predict",
-                                with_score=True)
-            triples, ent_groups = rel_output[0], rel_output[1]
-        else:
-            triples, ent_groups = [], []
+    #     # TODO The Entity Groups is not Good.
+    #     batch = [input_ids, None, None, None, None, None, None]
+    #     if sum([len(e) for e in entities]) > 0:
+    #         rel_output = self.rel_model(
+    #                             theta=self,
+    #                             batch=batch,
+    #                             hidden_state=hidden_state,
+    #                             entities=entities,
+    #                             return_loss=False,
+    #                             mode="predict",
+    #                             with_score=True)
+    #         triples, ent_groups = rel_output[0], rel_output[1]
+    #     else:
+    #         triples, ent_groups = [], []
 
-        # ent_groups
+    #     # ent_groups
 
-        # 构建输出
-        ents = []
-        ent_name = []
-        for ent in entities[0]:
-            em = self.tokenizer.decode(input_ids[0][ent[0]:ent[1]])
-            ent_type = self.config.dataset.ents[ent[2]]
-            score = ent[3].sigmoid().tolist()
+    #     # 构建输出
+    #     ents = []
+    #     ent_name = []
+    #     for ent in entities[0]:
+    #         em = self.tokenizer.decode(input_ids[0][ent[0]:ent[1]])
+    #         ent_type = self.config.dataset.ents[ent[2]]
+    #         score = ent[3].sigmoid().tolist()
 
-            scores = {}
-            for i, etype in enumerate(['not entity'] + self.config.dataset.ents):
-                scores[etype] = score[i]
+    #         scores = {}
+    #         for i, etype in enumerate(['not entity'] + self.config.dataset.ents):
+    #             scores[etype] = score[i]
 
-            if em not in ent_name:
-                ent_name.append(em)
-                ents.append({
-                    "entity text": em,
-                    "entity type": ent_type,
-                    "confidence":  scores[ent_type],
-                    "scores": scores
-                })
+    #         if em not in ent_name:
+    #             ent_name.append(em)
+    #             ents.append({
+    #                 "entity text": em,
+    #                 "entity type": ent_type,
+    #                 "confidence":  scores[ent_type],
+    #                 "scores": scores
+    #             })
 
-        pair_name = {}
-        for b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t, score in ent_groups:
-            sub_token = self.tokenizer.decode(input_ids[b][sub_s:sub_e])
-            obj_token = self.tokenizer.decode(input_ids[b][obj_s:obj_e])
-            sub_type = self.config.dataset.ents[sub_t]
-            obj_type = self.config.dataset.ents[obj_t]
-            pair_key = (sub_token, obj_token)
+    #     pair_name = {}
+    #     for b, sub_s, sub_e, obj_s, obj_e, sub_t, obj_t, score in ent_groups:
+    #         sub_token = self.tokenizer.decode(input_ids[b][sub_s:sub_e])
+    #         obj_token = self.tokenizer.decode(input_ids[b][obj_s:obj_e])
+    #         sub_type = self.config.dataset.ents[sub_t]
+    #         obj_type = self.config.dataset.ents[obj_t]
+    #         pair_key = (sub_token, obj_token)
 
-            pair_name[pair_key] = max(score, pair_name.get(pair_key, 0))
+    #         pair_name[pair_key] = max(score, pair_name.get(pair_key, 0))
 
-        pairs = [key + (value,) for key, value in pair_name.items()]
+    #     pairs = [key + (value,) for key, value in pair_name.items()]
 
-        rels = []
-        rels_name = []
-        # start, end 是左闭右开区间
-        # [batch_idx, sub_start, sub_end, obj_start, obj_end, sub_type, obj_type, score, rel_idx,        re_score]
-        #  0          1          2        3          4        5         6         7      8 (include NA)  9
-        rels_type = ["no relation"] + self.config.dataset.rels
-        for t in triples:
-            sub_token = self.tokenizer.decode(input_ids[t[0], t[1]:t[2]])
-            obj_token = self.tokenizer.decode(input_ids[t[0], t[3]:t[4]])
-            rel_type = rels_type[t[8]]
-            sub_type = self.config.dataset.ents[t[5]]
-            obj_type = self.config.dataset.ents[t[6]]
-            score = t[9].sigmoid().tolist()
+    #     rels = []
+    #     rels_name = []
+    #     # start, end 是左闭右开区间
+    #     # [batch_idx, sub_start, sub_end, obj_start, obj_end, sub_type, obj_type, score, rel_idx,        re_score]
+    #     #  0          1          2        3          4        5         6         7      8 (include NA)  9
+    #     rels_type = ["no relation"] + self.config.dataset.rels
+    #     for t in triples:
+    #         sub_token = self.tokenizer.decode(input_ids[t[0], t[1]:t[2]])
+    #         obj_token = self.tokenizer.decode(input_ids[t[0], t[3]:t[4]])
+    #         rel_type = rels_type[t[8]]
+    #         sub_type = self.config.dataset.ents[t[5]]
+    #         obj_type = self.config.dataset.ents[t[6]]
+    #         score = t[9].sigmoid().tolist()
 
-            scores = {}
-            for i, rtype in enumerate(rels_type):
-                scores[rtype] = score[i]
+    #         scores = {}
+    #         for i, rtype in enumerate(rels_type):
+    #             scores[rtype] = score[i]
 
-            if (sub_token, obj_token, rel_type) not in rels_name:
-                rels_name.append((sub_token, obj_token, rel_type))
-                rels.append({
-                    "subject": sub_token,
-                    "object": obj_token,
-                    "relation": rel_type,
-                    "pair_score": t[7],
-                    "confidence": scores[rel_type],
-                    "scores": scores
-                })
+    #         if (sub_token, obj_token, rel_type) not in rels_name:
+    #             rels_name.append((sub_token, obj_token, rel_type))
+    #             rels.append({
+    #                 "subject": sub_token,
+    #                 "object": obj_token,
+    #                 "relation": rel_type,
+    #                 "pair_score": t[7],
+    #                 "confidence": scores[rel_type],
+    #                 "scores": scores
+    #             })
 
-        return {
-            "entities": ents,
-            "pairs": pairs,
-            "relations": rels,
-        }
+    #     return {
+    #         "entities": ents,
+    #         "pairs": pairs,
+    #         "relations": rels,
+    #     }
 
 
     def forward(self, batch, mode="train"):
 
         # Forward
         input_ids, attention_mask, pos, triples, ent_maps, sent_mask, span_mask = batch
-        outputs = self.plm_model(input_ids, attention_mask=attention_mask, output_hidden_states=True) # type: ignore
+
+        if self.config.use_ner_prompt:
+            batch_size = input_ids.shape[0]
+            past_key_values = self.get_prompt(stage="ner", batch_size=batch_size)
+            prefix_attention_mask = torch.ones(batch_size, self.prompt_len).to(self.plm_model.device)
+            attention_mask = torch.cat((prefix_attention_mask, attention_mask), dim=1)
+        else:
+            past_key_values = None
+
+        outputs = self.plm_model(input_ids, attention_mask=attention_mask, output_hidden_states=True, past_key_values=past_key_values) # type: ignore
 
         # 一些参数
         hidden_state = outputs.hidden_states[-1]
@@ -254,38 +303,45 @@ class Theta(pl.LightningModule):
         output["hidden_state"] = hidden_state
 
         # [REQUIRED] 命名实体识别损失
-        if self.config.use_spert:
-            ner_logits, ner_loss = self.span_ner(hidden_state, span_mask=span_mask, labels=ent_maps, graph=self.graph, pos=pos)
-            entities = self.span_ner.decode_gold_entities(ent_maps, pos=pos)
+        # if self.config.use_spert:
+        #     ner_logits, ner_loss = self.span_ner(hidden_state, span_mask=span_mask, labels=ent_maps, graph=self.graph, pos=pos)
+        #     entities = self.span_ner.decode_gold_entities(ent_maps, pos=pos)
 
-        else:
-            ner_logits, ner_loss = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask)
-            entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
+        # else:
+        #     ner_logits, ner_loss = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask)
+        #     entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
             # ner_out = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask, return_hs=(self.config.use_ner_hs))
             # ner_logits, ner_loss = ner_out[0], ner_out[1]
             # if self.config.use_ner_hs:
             #     hidden_state = ner_out[2]
             # entities = self.ner_model.decode_entities(ent_maps, pos=pos, mask=sent_mask) # gold entities
 
-        if self.config.use_pre_rel and mode == "train":
-            pre_rel_loss, logits = self.pre_rel_model(hidden_state,
-                                              mask=sent_mask, 
-                                              rel_tag_embeds=self.get_rel_tag_embeddings(),
-                                              mode=mode,
-                                              triples=triples)
+        # if self.config.use_pre_rel and mode == "train":
+        #     pre_rel_loss, logits = self.pre_rel_model(hidden_state,
+        #                                       mask=sent_mask,
+        #                                       rel_tag_embeds=self.get_rel_tag_embeddings(),
+        #                                       mode=mode,
+        #                                       triples=triples)
+
+
+        ner_out = self.ner_model(hidden_state, labels=ent_maps, graph=self.graph, mask=sent_mask, return_hs=(self.config.use_ner_hs))
+        ner_logits, ner_loss = ner_out[0], ner_out[1]
+        if self.config.use_ner_hs:
+            hidden_state = ner_out[2][-1]
+        entities = self.ner_model.decode_entities(ent_maps, pos=pos) # gold entities
 
         # add entities to graph
-        if self.graph is not None:
-            for b, entity in enumerate(entities):
-                cur_doc_id = pos[b][4]
-                if self.cur_doc_id != cur_doc_id or self.cur_mode != mode:
-                    self.cur_doc_id = cur_doc_id
-                    self.cur_mode = mode
-                    self.graph.reset()
+        # if self.graph is not None:
+        #     for b, entity in enumerate(entities):
+        #         cur_doc_id = pos[b][4]
+        #         if self.cur_doc_id != cur_doc_id or self.cur_mode != mode:
+        #             self.cur_doc_id = cur_doc_id
+        #             self.cur_mode = mode
+        #             self.graph.reset()
 
-                for e in entity:
-                    embedding = hidden_state[b, e[0]:e[1]].mean(dim=0).detach().clone()  # or max
-                    self.graph.add_node(name="ent", embedding=embedding, ent_type=e[2], node_type='entity')
+        #         for e in entity:
+        #             embedding = hidden_state[b, e[0]:e[1]].mean(dim=0).detach().clone()  # or max
+        #             self.graph.add_node(name="ent", embedding=embedding, ent_type=e[2], node_type='entity')
 
         output["gold_entities"] = entities
         output["ner_logits"] = ner_logits
@@ -300,21 +356,18 @@ class Theta(pl.LightningModule):
                                 return_loss=True,
                                 mode=mode)
 
-            triples_pred, rel_loss, filter_loss = rel_output
+            triples_pred, rel_loss, filter_loss, sent_ner_loss = rel_output
             output["triples_pred_with_gold"] = triples_pred
 
         else:
             rel_loss = torch.tensor(0.0, device=input_ids.device)
             filter_loss = torch.tensor(0.0, device=input_ids.device)
+            sent_ner_loss = torch.tensor(0.0, device=input_ids.device)
             output["triples_pred_with_gold"] = []
 
         # 如果是测试阶段，使用预测的 triples
         if mode != "train":
-            if self.config.use_spert:
-                entities = self.span_ner.decode_entities(ner_logits, span_mask, pos=pos)
-            elif self.config.ner_rate > 0 and not self.config.use_gold_ent_val:
-                entities = self.ner_model.decode_entities(ner_logits, pos=pos, mask=sent_mask)
-
+            entities = self.ner_model.decode_entities(ner_logits, pos=pos)
             output["pred_entities"] = entities
 
             if sum([len(e) for e in entities]) > 0:
@@ -331,21 +384,45 @@ class Theta(pl.LightningModule):
 
         # 计算损失
         if mode == "train":
-            loss = ner_loss * self.config.ner_rate + rel_loss * self.config.rel_rate + filter_loss * self.config.filter_rate
-            self.log("ner_loss", ner_loss)
-            self.log("rel_loss", rel_loss)
-            self.log("filter_loss", filter_loss) # type: ignore
-            loss_weight = [self.config.ner_rate, self.config.rel_rate, self.config.filter_rate]
 
-            if self.config.use_pre_rel:
-                loss += pre_rel_loss * self.config.pre_rel_rate
-                self.log("pre_rel_loss", pre_rel_loss)
-                loss_weight.append(self.config.pre_rel_rate)
+            ner_rate = self.config.ner_rate
+            rel_rate = self.config.rel_rate
+            filter_rate = self.config.filter_rate
+            rel_ner_rate = self.config.rel_ner_rate
 
-            if self.config.use_loss_fix:
-                loss = loss
-            else:
-                loss = loss / sum(loss_weight) * len(loss_weight)
+            task_warmup_index = int(self.config.get("task_warmup_index", 1))
+            rate_func = lambda x, a: min(a, (self.current_epoch + 1) / int(x)) if x else 1
+            if self.config.use_fix_rate:
+                rate_func = lambda x, a: min(a, 0.001 + self.current_epoch / int(x)) if x else 1
+            rel_rate = rate_func(self.config.use_warmup_rel, self.config.use_rel_max_rate or 1) ** task_warmup_index * self.config.rel_rate
+            ner_rate = rate_func(self.config.use_warmup_ner, 1) ** task_warmup_index * self.config.ner_rate
+            filter_rate = rate_func(self.config.use_warmup_filter, 1) ** task_warmup_index * self.config.filter_rate
+
+            loss = ner_loss * ner_rate + rel_loss * rel_rate + filter_loss * filter_rate + sent_ner_loss * rel_ner_rate
+
+            if self.config.mean_loss:
+                loss /= (ner_rate + rel_rate + filter_rate + rel_ner_rate)
+
+            # stop_grad
+            # if self.config.loss_stop_grad:
+            #     ner_rate = 1 / (ner_loss.detach().item() + 1e-8) * ner_rate
+            #     rel_rate = 1 / (rel_loss.detach().item() + 1e-8) * rel_rate
+            #     filter_rate = 1 / (filter_loss.detach().item() + 1e-8) * filter_rate
+            #     rel_ner_rate = 1 / (sent_ner_loss.detach().item() + 1e-8) * rel_ner_rate
+            #     loss = ner_loss * ner_rate + rel_loss * rel_rate + filter_loss * filter_rate + sent_ner_loss * rel_ner_rate
+
+            self.log("loss/ner_loss", ner_loss)
+            self.log("loss/rel_loss", rel_loss)
+            self.log("loss/filter_loss", filter_loss) # type: ignore
+            self.log("loss/sent_ner_loss", sent_ner_loss)
+
+            # if self.config.use_pre_rel:
+            #     loss += pre_rel_loss * self.config.pre_rel_rate
+            #     self.log("pre_rel_loss", pre_rel_loss)
+
+            # if self.config.use_rel_ner:
+            #     loss += sent_ner_loss * rel_ner_rate
+            #     self.log("loss/sent_ner_loss", sent_ner_loss)
 
             output["loss"] = loss
 
@@ -355,7 +432,7 @@ class Theta(pl.LightningModule):
     def training_step(self, batch, batch_idx):
 
         loss = self(batch, mode="train")["loss"]
-        self.log('train_loss', loss)
+        self.log('loss/train_loss', loss)
 
         lr_step = {}
         for i, pg in enumerate(self.optimizers().param_groups): # type: ignore
@@ -366,47 +443,59 @@ class Theta(pl.LightningModule):
 
     def training_epoch_end(self, outputs):
         self.filter.log_filter_train_metrics()
+        self.rel_model.log_filter_rate()
+        self.rel_model.log_statistic_train()
 
     def validation_step(self, batch, batch_idx):
         output = self(batch, mode="dev")
         return self.eval_step_output(batch, output)
 
     def validation_epoch_end(self, outputs):
-        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
+        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples', slice=3)
         ner_f1, ner_p, ner_r = f1_score(outputs, 'pred_entities', 'gold_entities')
-        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples')
+        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples', slice=3)
 
         self.best_f1 = max(f1, self.best_f1)
-        self.log_dict_values({'val_p': p, 'val_r': r})
-        self.log_dict_values({'val_f1': f1, 'best_f1': self.best_f1}, on_epoch=True, prog_bar=True)
-        self.log_dict_values({'val_ner_f1': ner_f1, 'val_ner_p': ner_p, 'val_ner_r': ner_r})
-        self.log_dict_values({'val_rel_f1': rel_f1, 'val_rel_p': rel_p, 'val_rel_r': rel_r})
+        self.log_dict_values({'val_f1': f1, 'val/precision': p, 'val/recall': r})
+        self.log_dict_values({'best_f1': self.best_f1}, on_epoch=True, prog_bar=True)
+        self.log_dict_values({'val/ner_f1': ner_f1, 'val/ner_p': ner_p, 'val/ner_r': ner_r})
+        self.log_dict_values({'val/rel_f1': rel_f1, 'val/rel_p': rel_p, 'val/rel_r': rel_r})
         self.filter.log_filter_val_metrics()
         self.rel_model.log_ent_pair_info()
+        self.rel_model.log_filter_rate_val()
+        self.rel_model.log_statistic_val()
 
     def test_step(self, batch, batch_idx):
         output = self(batch, mode="test")
         return self.eval_step_output(batch, output)
 
     def test_epoch_end(self, outputs):
-        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples')
+        f1, p, r = f1_score(outputs, 'pred_triples', 'gold_triples', slice=3)
+        f1_plus, p_plus, r_plus = f1_score(outputs, 'pred_triples', 'gold_triples')
         ner_f1, ner_p, ner_r = f1_score(outputs, 'pred_entities', 'gold_entities')
-        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples')
+        rel_f1, rel_p, rel_r = f1_score(outputs, 'pred_triples_with_gold', 'gold_triples', slice=3)
 
+        # returned
         self.test_f1 = f1
         self.test_p = p
         self.test_r = r
+        self.test_f1_plus = f1_plus
+        self.test_p_plus = p_plus
+        self.test_r_plus = r_plus
         self.ner_f1 = ner_f1
         self.ner_p = ner_p
         self.ner_r = ner_r
         self.rel_f1 = rel_f1
         self.rel_p = rel_p
         self.rel_r = rel_r
-        self.log_dict_values({'test_f1': f1, 'test_p': p, 'test_r': r})
-        self.log_dict_values({'test_ner_f1': ner_f1, 'test_ner_p': ner_p, 'test_ner_r': ner_r})
-        self.log_dict_values({'test_rel_f1': rel_f1, 'test_rel_p': rel_p, 'test_rel_r': rel_r})
-        self.filter.log_filter_val_metrics()
-        self.rel_model.log_ent_pair_info()
+        self.log_dict_values({'test/f1': f1, 'test/p': p, 'test/r': r})
+        self.log_dict_values({'test/ner_f1': ner_f1, 'test/ner_p': ner_p, 'test/ner_r': ner_r})
+        self.log_dict_values({'test/rel_f1': rel_f1, 'test/rel_p': rel_p, 'test/rel_r': rel_r})
+        self.log_dict_values({'test/f1_plus': f1_plus, 'test/p_plus': p_plus, 'test/r_plus': r_plus})
+        # self.filter.log_filter_val_metrics()
+        # self.rel_model.log_ent_pair_info()
+        # self.rel_model.log_filter_rate_val()
+        # self.rel_model.log_statistic_val()
 
     def eval_step_output(self, batch, output):
         # batch = batch_filter(batch, self.tokenizer.sep_token_id, self.tokenizer.pad_token_id)
@@ -444,10 +533,7 @@ class Theta(pl.LightningModule):
                 sub_type = self.config.dataset.ents[t[5]]
                 obj_type = self.config.dataset.ents[t[6]]
                 triple = (sub_token, obj_token, rel_type, sub_type, obj_type)
-                if self.config.use_rel_strict:
-                    pred_triples.add(triple)
-                else:
-                    pred_triples.add(triple[:3])
+                pred_triples.add(triple)
 
         if pred_only:
             return pred_triples
@@ -464,10 +550,7 @@ class Theta(pl.LightningModule):
                     sub_type = self.config.dataset.ents[t[5]]
                     obj_type = self.config.dataset.ents[t[6]]
                     triple = (sub_token, obj_token, rel_type, sub_type, obj_type)
-                    if self.config.use_rel_strict:
-                        gold_triples.add(triple)
-                    else:
-                        gold_triples.add(triple[:3])
+                    gold_triples.add(triple)
                 else:
                     break
         return pred_triples, gold_triples
@@ -486,8 +569,9 @@ class Theta(pl.LightningModule):
             self.log(k, v, **kwargs)
 
 
-    def get_rel_tag_embeddings(self, with_na=False, with_grad=True):
-        rel_tag_embeddings = self.plm_model.get_input_embeddings().weight[self.rel_ids]
+    def get_rel_tag_embeddings(self, with_na=False, with_grad=True, device=None):
+        device = device or self.device
+        rel_tag_embeddings = self.plm_model.get_input_embeddings().weight[torch.tensor(self.rel_ids, device=self.device)]
         if not with_na:
             rel_tag_embeddings = rel_tag_embeddings[1:]
         if not with_grad:

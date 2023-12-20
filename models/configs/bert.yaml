@@ -1,2 +1,2 @@
 name: BERT
-model_name_or_path: bert-base-uncased
+model_name_or_path: /home/zwj/workspace/models/bert-base-uncased

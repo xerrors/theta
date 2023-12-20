@@ -40,25 +40,41 @@ class DataModule(pl.LightningDataModule):
 
     def __get_dataset(self, mode):
         """根据不同的任务类型以及数据集类型使用不同的数据加载方法"""
-        print(utils.green(f"Loading {mode} data..."))
-        if self.config.dataset.name in ["ace2005"]:
-            os.makedirs(os.path.join(self.config.dataset.data_dir, ".cache"), exist_ok=True)
-            cache_path = os.path.join(self.config.dataset.data_dir, ".cache", f"{mode}.cache")
+        print(utils.green(f"Loading {mode} data..."), end=" ")
+        if self.config.dataset.name in ["ace2005", "ace2004", 'scierc']:
+
+            if self.config.dataset.name == "ace2005":
+                filename = self.config.dataset[mode]
+            elif self.config.dataset.name == "ace2004":
+                piece = self.config.data_piece or 0
+                assert piece in [0, 1, 2, 3, 4], "data_piece must be in [0, 1, 2, 3, 4]"
+                filename = self.config.dataset[mode][piece]
+            elif self.config.dataset.name == 'scierc':
+                filename = self.config.dataset[mode]
+
+            cache_tag = ""
+            cache_tag += f".max{self.config.max_seq_len}"
+            cache_tag += f".ctw{self.config.context_window}"
+            cache_tag += ".cross_ner" if self.config.use_cross_ner else ""
+
+            cache_path = filename + cache_tag + ".cache"
             if os.path.exists(cache_path) and self.config.use_cache:
                 print(utils.green_background("Cache found!"), utils.green(f"Loading {mode} data from {cache_path}"))
-                datasets = torch.load(os.path.join(cache_path))
+                datasets = torch.load(cache_path)
             else:
-                datasets = self.get_dataset_ace(mode)
-                torch.save(datasets, os.path.join(cache_path))
+                datasets = self.get_dataset_ace(mode, filename)
+                if self.config.use_cache:
+                    torch.save(datasets, cache_path)
         else:
             raise NotImplementedError(
                 f"Dataset {self.config.dataset.name} not implemented!")
 
         return datasets
 
-    def get_dataset_ace(self, mode):
+    def get_dataset_ace(self, mode, filename=None):
 
-        dataset = Dataset(self.config.dataset[mode])
+        dataset = Dataset(filename)
+
         features = convert_dataset_to_samples(
             dataset, self.config, self.tokenizer, is_test=(mode == "test"))
 
@@ -74,7 +90,7 @@ class DataModule(pl.LightningDataModule):
             )
 
         return dataset
-    
+
     def get_dataset_ace_for_predict(self):
 
         dataset = Dataset(self.config.dataset["test"])
@@ -88,7 +104,7 @@ class DataModule(pl.LightningDataModule):
                     "doc": doc_text,
                     "sent": " ".join(sent.text),
                 }
-                
+
                 entities = []
                 for ent in sent.ner:
                     entities.append({
@@ -114,11 +130,13 @@ class DataModule(pl.LightningDataModule):
         return items
 
     def train_dataloader(self):
-        shuffle = False if self.config.use_graph_layers > 0 else True
-        return DataLoader(self.data_train, shuffle=shuffle, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
+        return DataLoader(self.data_train, shuffle=True, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
 
     def val_dataloader(self):
-        return DataLoader(self.data_val, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
+        if self.config.use_val_same_as_test:
+            return DataLoader(self.data_val, shuffle=False, batch_size=self.config.test_batch_size, num_workers=self.config.num_worker, pin_memory=True)
+        else:
+            return DataLoader(self.data_val, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
 
     def test_dataloader(self):
-        return DataLoader(self.data_test, shuffle=False, batch_size=self.config.batch_size, num_workers=self.config.num_worker, pin_memory=True) # type: ignore
+        return DataLoader(self.data_test, shuffle=False, batch_size=self.config.test_batch_size, num_workers=self.config.num_worker, pin_memory=False) # type: ignore
