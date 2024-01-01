@@ -4,10 +4,20 @@ import time
 import torch
 import yaml
 import json
-import utils
 
-from transformers import AutoConfig
+from transformers import AutoConfig, logging
 
+from xerrors import get_gpu_by_user_input
+from xerrors import cprint as cp
+from xerrors import utils
+
+
+def config_logging(config):
+    """设置日志等级以及配置保存的路径"""
+    if config.debug:
+        logging.set_verbosity_debug()
+    else:
+        logging.set_verbosity_error()
 
 class SimpleConfig(dict):
 
@@ -41,7 +51,7 @@ class Config(SimpleConfig):
 
         ckpt = args.test_from_ckpt or kwargs.get("test_from_ckpt")
         if ckpt:
-            self.load_from_ckpt(ckpt) # type: ignore
+            self.load_from_ckpt(ckpt)   # type: ignore
             # self.wandb = False
             self.offline = True
 
@@ -51,12 +61,13 @@ class Config(SimpleConfig):
             self.dataset = SimpleConfig(self.dataset)
             self.__load_ext_config()
             if kwargs.get("gpu") == "not specified" or kwargs.get("gpu") is None:
-                self.gpu = utils.get_gpu_by_user_input()
+                self.gpu = get_gpu_by_user_input()
 
             self.test_from_ckpt = ckpt
             self.last_test_time = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
             self.test_result = os.path.join(self.output_dir, f"test-result-{self.tag}-{self.last_test_time}.json")
             self.prepare()
+            self.offline = True  # force to offline
             return
 
         self.args = args
@@ -117,7 +128,7 @@ class Config(SimpleConfig):
 
         # 创建此次实验的基本信息，运行时间，输出路径
         self.start = time.strftime("%Y-%m-%d_%H-%M-%S", time.localtime())
-        self.output_dir = os.path.join(str(self.output), f"ouput-{self.start}-{self.tag}")
+        self.output_dir = os.path.join(str(self.output), "training_output", f"{self.start}-{self.tag}")
         os.makedirs(self.output_dir, exist_ok=True)
 
         if self.debug and not self.test_from_ckpt:
@@ -128,17 +139,17 @@ class Config(SimpleConfig):
         if self.fast_dev_run:
             # self.wandb = False
             self.offline = True
-            print(utils.blue_background(">>> FAST DEV RUN MODE <<<"))
+            print(cp.blue_background(">>> FAST DEV RUN MODE <<<"))
 
         self.test_result = os.path.join(self.output_dir, f"test-result.json")
 
     def prepare(self):
         # 设置日志等级
-        utils.config_logging(self)
+        config_logging(self)
 
         # 配置 GPU
         if self.gpu == "not specified":
-            self.gpu = utils.get_gpu_by_user_input()
+            self.gpu = get_gpu_by_user_input()
         os.environ['CUDA_VISIBLE_DEVICES'] = self.gpu
 
         if self.precision == 16:
@@ -147,9 +158,12 @@ class Config(SimpleConfig):
             torch.set_float32_matmul_precision('high')
 
     def save_best_model_path(self, path):
-        self.best_model_path = path
-        self.last_model_path = path.replace(path.split(os.sep)[-1], "last.ckpt")
-        print(utils.green("Done!"), f"Best model saved at: {path}")
+        if path:
+            self.best_model_path = path
+            self.last_model_path = path.replace(path.split(os.sep)[-1], "last.ckpt")
+            print(cp.green("Done!"), f"Best model saved at: {path}")
+        else:
+            print(cp.warning("No Ckpt Path Found!"))
 
     def save_config(self, filename="config.yaml"):
         """将自身的所有属性都保存下来，不包含方法"""
@@ -167,7 +181,7 @@ class Config(SimpleConfig):
                 config[key] = value
 
         file_path = os.path.join(self.output_dir, filename)
-        # print(utils.green("Done!"), f"Config saved at: {file_path}")
+        # print(cp.green("Done!"), f"Config saved at: {file_path}")
         with open(file_path, 'w') as f:
             yaml.dump(config, f)
 

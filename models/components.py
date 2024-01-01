@@ -3,7 +3,14 @@ import torch.nn as nn
 import pytorch_lightning as pl
 
 class MultiNonLinearClassifier(nn.Module):
-    def __init__(self, hidden_size, tag_size, layers_num=1, hidden_dim=None, dropout_rate=0.1, with_init=False):
+    def __init__(self,
+                 hidden_size,
+                 tag_size,
+                 layers_num=1,
+                 hidden_dim=None,
+                 dropout_rate=0.1,
+                 with_init=False,
+                 use_norm=False):
         super(MultiNonLinearClassifier, self).__init__()
         self.tag_size = tag_size
         self.activation = nn.ReLU()
@@ -17,6 +24,7 @@ class MultiNonLinearClassifier(nn.Module):
         self.layers = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(input_dims[i], output_dims[i]),
+                nn.LayerNorm(output_dims[i]) if use_norm else nn.Identity(),
                 self.activation,
                 nn.Dropout(dropout_rate)
             ) for i in range(layers_num)
@@ -204,14 +212,15 @@ class FeedForward(nn.Module):
 
         return x
 
+
 class PrefixEncoder(torch.nn.Module):
-    r'''
+    """
     The torch.nn model to encode the prefix
 
     Input shape: (batch-size, prefix-length)
 
     Output shape: (batch-size, prefix-length, 2*layers*hidden)
-    '''
+    """
     def __init__(self, num_hidden_layers, prompt_len, prefix_hidden_size, hidden_size, prefix_projection=False):
         super().__init__()
         self.prefix_projection = prefix_projection

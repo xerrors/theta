@@ -2,7 +2,7 @@ from torch.optim import AdamW
 from lion_pytorch import Lion
 from transformers.optimization import get_cosine_schedule_with_warmup
 
-import utils
+from xerrors import cprint as cp
 
 no_decay_param = ["bias", "LayerNorm.weight", "layer_norm.weight"]
 
@@ -26,23 +26,23 @@ def get_optimizer(theta, config):
 
     added_list = []
     optimizer_group_parameters = []
+    optimizer_group_parameters.extend(get_params(theta, name="ner_prefix_encoder", lr=ner_lr))
+    added_list.append("ner_prefix_encoder")
+
+    optimizer_group_parameters.extend(get_params(theta, name="rel_prefix_encoder", lr=rel_lr))
+    added_list.append("rel_prefix_encoder")
+
     optimizer_group_parameters.extend(get_params(theta, name="plm_model", lr=model_lr))
     added_list.append("plm_model")
 
     optimizer_group_parameters.extend(get_params(theta, name="filter", lr=filter_lr))
     added_list.append("filter")
 
-    # if config.use_span_ner:
-    #     optimizer_group_parameters.extend(get_params(theta, name="span_ner", lr=task_lr))
-    #     added_list.append("span_ner")
+    optimizer_group_parameters.extend(get_params(theta, name="ner_model", lr=ner_lr))
+    added_list.append("ner_model")
 
-    if config.use_ner != "lmhead":
-        optimizer_group_parameters.extend(get_params(theta, name="ner_model", lr=ner_lr))
-        added_list.append("ner_model")
-
-    if config.use_rel != "lmhead":
-        optimizer_group_parameters.extend(get_params(theta, name="rel_model", lr=rel_lr))
-        added_list.append("rel_model")
+    optimizer_group_parameters.extend(get_params(theta, name="rel_model", lr=rel_lr))
+    added_list.append("rel_model")
 
     optimizer_group_parameters.extend(get_params(theta, name=None, lr=decoder_lr, added_list=added_list))
 
@@ -119,7 +119,7 @@ def get_params(model, name, lr, exclude=[], added_list=[]):
 
     if optimizer_group[0]["params"] == []:
         if name:
-            print(utils.yellow("[WARNING]"),
+            print(cp.yellow("[WARNING]"),
                   f"{name} that can not be added to optimizer group.")
         return []
 

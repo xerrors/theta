@@ -2,10 +2,10 @@ import pytorch_lightning as pl
 from torch.utils.data import DataLoader, TensorDataset
 from transformers import AutoTokenizer
 import os
-import utils
 import torch
 from data.data_structures import Dataset
 from data.utils import convert_dataset_to_samples
+from xerrors import cprint as cp
 
 
 class DataModule(pl.LightningDataModule):
@@ -40,7 +40,7 @@ class DataModule(pl.LightningDataModule):
 
     def __get_dataset(self, mode):
         """根据不同的任务类型以及数据集类型使用不同的数据加载方法"""
-        print(utils.green(f"Loading {mode} data..."), end=" ")
+        print(cp.green(f"Loading {mode} data..."), end=" ")
         if self.config.dataset.name in ["ace2005", "ace2004", 'scierc']:
 
             if self.config.dataset.name == "ace2005":
@@ -59,7 +59,7 @@ class DataModule(pl.LightningDataModule):
 
             cache_path = filename + cache_tag + ".cache"
             if os.path.exists(cache_path) and self.config.use_cache:
-                print(utils.green_background("Cache found!"), utils.green(f"Loading {mode} data from {cache_path}"))
+                print(cp.green_background("Cache found!"), cp.green(f"Loading {mode} data from {cache_path}"))
                 datasets = torch.load(cache_path)
             else:
                 datasets = self.get_dataset_ace(mode, filename)

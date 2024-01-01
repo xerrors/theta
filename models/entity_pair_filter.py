@@ -28,29 +28,14 @@ class FilterModel(pl.LightningModule):
         self.labels_val = None
         hidden_size = self.config.model.hidden_size
 
-        dropout_rate = self.config.filter_dropout_rate # 0.1 default
+        dropout_rate = self.config.filter_dropout_rate  # 0.1 default
 
         # attention_out_dim = int(self.config.model.hidden_size * float(self.config.get("use_filter_opt4", 1.0)))
         self.tag_size = len(self.config.dataset.rels) + 1
-        self.get_bio_tag_embedding = lambda d:theta.plm_model.get_input_embeddings()(torch.tensor(theta.ent_ids, device=d))
+        self.get_bio_tag_embedding = lambda d: theta.plm_model.get_input_embeddings()(torch.tensor(theta.ent_ids, device=d))
 
         if self.config.use_length_embedding:
             self.length_embedding = theta.length_embedding
-        # if self.config.use_filter_attn:
-
-        #     self.attn_mode = self.config.use_filter_attn[0]
-        #     self.attn_opt = self.config.use_filter_attn[1:]
-
-        #     self.self_attn = SelfAttention(embed_dim=hidden_size)
-        #     self.downscale = nn.Linear(hidden_size * 2, hidden_size, bias=False)
-        #     self.upscale = nn.Linear(hidden_size, hidden_size * 2, bias=False)
-        #     self.word_embeddings = theta.plm_model.get_input_embeddings()
-        #     self.cross_attn = nn.MultiheadAttention(hidden_size, num_heads=4, dropout=0.1, bias=True, batch_first=True)
-        #     self.layer_norm = nn.LayerNorm(hidden_size)
-
-        # else:
-        #     self.attn_mode = None
-        #     self.attn_opt = None
 
         self.rel_ids = theta.rel_ids
         self.rel_type_num = len(self.config.dataset.rels)
@@ -58,28 +43,23 @@ class FilterModel(pl.LightningModule):
         self.sub_proj = nn.Linear(hidden_size, hidden_size)
         self.obj_proj = nn.Linear(hidden_size, hidden_size)
 
-        # if self.attn_opt == '2':
-        #     classifier_input_dim = attention_out_dim
-        # else:
-        #     classifier_input_dim = attention_out_dim * 2
+        if self.config.use_filter_sent_hs or self.config.use_span_mention:
+            filter_input_size = hidden_size * 3
+        else:
+            filter_input_size = hidden_size * 2
 
         self.filter_entity_pair_net = MultiNonLinearClassifier(
-            hidden_size * 2,
+            filter_input_size,
             layers_num=self.config.filter_mlp_layer_num or 1,
             dropout_rate=dropout_rate,
             hidden_dim=None,
-            tag_size=self.tag_size)
+            tag_size=self.tag_size,
+            use_norm=self.config.use_span_mention)
 
         if self.config.use_filter_sent_hs:
             self.sent_proj = nn.Linear(hidden_size, hidden_size)
-            self.filter_entity_pair_net = MultiNonLinearClassifier(
-                hidden_size * 3,
-                layers_num=self.config.filter_mlp_layer_num or 1,
-                dropout_rate=dropout_rate,
-                hidden_dim=None,
-                tag_size=self.tag_size)
 
-            # 为了保证特征经过 linear 之后变化不大，参数初始化为
+        # 为了保证特征经过 linear 之后变化不大，参数初始化为
         if self.config.use_filter_proj_norm:
             nn.init.normal_(self.sub_proj.weight, std=0.02)
             nn.init.normal_(self.obj_proj.weight, std=0.02)
@@ -119,13 +99,14 @@ class FilterModel(pl.LightningModule):
         return index
 
     def get_filter_label(self, entities, triples, logits, map_dict):
+        # sub_s, sub_e, obj_s, obj_e, rel_id, sub_type, obj_type
         labels = torch.zeros(logits.shape[0], dtype=torch.long, device=logits.device)
         for b, triple in enumerate(triples):
             for t in triple:
                 if t[0] == -1:
                     continue
-                i = map_dict.get((b, t[0].item()))
-                j = map_dict.get((b, t[2].item()))
+                i = map_dict.get((b, t[0].item(), t[1].item()))
+                j = map_dict.get((b, t[2].item(), t[3].item()))
                 if i is None or j is None:
                     continue
                 index = self.convert_bij_to_index((b,i,j), entities)
@@ -143,11 +124,12 @@ class FilterModel(pl.LightningModule):
         hidden_state = self.dropout_hidden_state(hidden_state)
 
         for i in range(len(entities)):
-            if len(entities[i]) == 0: continue
+            if len(entities[i]) == 0:
+                continue
 
             # 记录实体 e 在此 batch i 的所有实体中的位置，后面需要用到表格索引的
             for j, e in enumerate(entities[i]):
-                map_dict[(i, e[0])] = j
+                map_dict[(i, e[0], e[1])] = j
 
             if not self.config.use_rel_opt2 or self.config.use_rel_opt2 == "head":
                 ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])
@@ -162,21 +144,9 @@ class FilterModel(pl.LightningModule):
             else:
                 raise NotImplementedError("use_rel_opt2: {}".format(self.config.use_rel_opt2))
 
-
             if self.config.use_length_embedding:
                 length_embeds = self.length_embedding(torch.tensor([ent[1] - ent[0] for ent in entities[i]], device=hidden_state.device))
                 ent_hs += length_embeds
-
-            # if self.attn_opt == '1':
-            #     tag_embeddings = self.word_embeddings(torch.tensor(self.rel_ids, device=hidden_state.device))
-            #     tag_embeddings = tag_embeddings.unsqueeze(0) # [1, 1, ent_num, hidden_size]
-
-            #     ent_hs = self.self_attn(ent_hs)
-            #     attn_out = self.cross_attn(ent_hs.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
-            #     ent_hs = self.layer_norm(ent_hs + attn_out).squeeze(0)
-            # if self.config.use_filter_tag == "b":
-            #     ent_tag = torch.stack([self.get_bio_tag_embedding(hidden_state.device)[ent[2]+1] for ent in entities[i]])
-            #     ent_hs += ent_tag
 
             # ent_hs = torch.stack([hidden_state[i, ent[0]] for ent in entities[i]])    # (ent_num, hidden_size)
             ent_num, hidden_size = ent_hs.shape
@@ -184,109 +154,63 @@ class FilterModel(pl.LightningModule):
             ent_hs_x = self.sub_proj(ent_hs)
             ent_hs_y = self.obj_proj(ent_hs)
 
-            # if self.config.use_filter_tag == "a":
-            #     ent_tag = torch.stack([self.get_bio_tag_embedding(hidden_state.device)[ent[2]+1] for ent in entities[i]])
-            #     ent_hs_x += ent_tag
-            #     ent_hs_y += ent_tag
+            # use span hidden states
+            if self.config.use_span_mention:
+                ent_pair_features = []
+                for sub_i, sub in enumerate(entities[i]):
+                    sub_hs = ent_hs_x[sub_i]
+                    for obj_i, obj in enumerate(entities[i]):
+                        obj_hs = ent_hs_y[obj_i]
+                        span_s, span_e = min(sub[0], obj[0]), max(sub[1], obj[1])
+                        assert span_e > span_s
+                        span_mention = hidden_state[i, span_s:span_e].mean(dim=0)
+                        ent_pair_features.append(torch.cat([sub_hs, obj_hs, span_mention]))
 
-            ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
-            ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
+                ent_pair_features = torch.stack(ent_pair_features)
+                ent_hs_pair = self.filter_entity_pair_net(ent_pair_features).squeeze(-1)
 
-            if self.config.use_filter_sent_hs:
-                sent_hs = hidden_state[i][0]
-                sent_hs = sent_hs.unsqueeze(0).repeat(ent_num, ent_num, 1)
-                ent_hs_pair = torch.cat([sent_hs, ent_hs_x, ent_hs_y], dim=-1)
-                ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
             else:
-                ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)    # (ent_num, ent_num, hidden_size * 2)
-                ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
+                ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
+                ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
 
-            # if self.attn_opt == '3':
-            #     tag_embeddings = self.word_embeddings(torch.tensor(self.rel_ids, device=hidden_state.device))
-            #     tag_embeddings = tag_embeddings.unsqueeze(0) # [1, 1, ent_num, hidden_size]
+                if self.config.use_filter_sent_hs:
+                    sent_hs = hidden_state[i][0]
+                    sent_hs = sent_hs.unsqueeze(0).repeat(ent_num, ent_num, 1)
+                    ent_hs_pair = torch.cat([sent_hs, ent_hs_x, ent_hs_y], dim=-1)
+                    ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
+                else:
+                    ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)    # (ent_num, ent_num, hidden_size * 2)
+                    ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
 
-            #     ent_hs_x = self.self_attn(ent_hs_x)
-            #     attn_out = self.cross_attn(ent_hs_x.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
-            #     ent_hs_x = self.layer_norm(ent_hs_x + attn_out).squeeze(0)
-
-            #     ent_hs_y = self.self_attn(ent_hs_y)
-            #     attn_out = self.cross_attn(ent_hs_y.unsqueeze(0), tag_embeddings, tag_embeddings)[0]
-            #     ent_hs_y = self.layer_norm(ent_hs_y + attn_out).squeeze(0)
-
-            # if self.config.use_filter_pro:
-            #     ent_hs_x = self.dropout(ent_hs_x)
-            #     ent_hs_y = self.dropout(ent_hs_y)
-
-            # if not self.config.use_filter_opt1 or self.config.use_filter_opt1 == "attention":
-            #     ent_hs_pair = torch.matmul(ent_hs_x, ent_hs_y.transpose(-2, -1)) / math.sqrt(hidden_size)    # (ent_num, ent_num, hidden_size)
-
-            # elif self.config.use_filter_opt1 == "concat" or self.config.use_filter_opt1 == "concat_pro":
-            #     ent_hs_x = ent_hs_x.unsqueeze(0).repeat(ent_num, 1, 1)
-            #     ent_hs_y = ent_hs_y.unsqueeze(1).repeat(1, ent_num, 1)
-            #     ent_hs_pair = torch.cat([ent_hs_x, ent_hs_y], dim=-1)    # (ent_num, ent_num, hidden_size * 2)
-
-                # if self.attn_opt == '2':
-                #     tag_embeddings = self.word_embeddings(torch.tensor(self.rel_ids, device=hidden_state.device))
-                #     tag_embeddings = tag_embeddings.unsqueeze(0) # [1, 1, ent_num, hidden_size]
-
-                #     ent_hs_pair = self.downscale(ent_hs_pair)
-                #     ent_hs_pair = self.self_attn(ent_hs_pair)
-                #     ent_hs_pair = ent_hs_pair.view(1, -1, hidden_size)
-                #     attn_out = self.cross_attn(ent_hs_pair, tag_embeddings, tag_embeddings)[0]
-                #     ent_hs_pair = self.layer_norm(ent_hs_pair + attn_out)
-                #     ent_hs_pair = ent_hs_pair.view(ent_num, ent_num, hidden_size)
-
-            #     ent_hs_pair = self.filter_entity_pair_net(ent_hs_pair).squeeze(-1)
-
-            # else:
-            #     raise ValueError("use_filter_opt1 must be in ['attention', 'concat', 'concat_pro']")
-
-            ent_hs_pair = ent_hs_pair.view(-1, self.tag_size).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
+                ent_hs_pair = ent_hs_pair.view(-1, self.tag_size).squeeze(-1)    # (ent_num, ent_num, hidden_size * 2)
 
             logits.append(ent_hs_pair)
 
+        if len(logits) == 0:
+            return None, torch.tensor(0.0).cuda(), {}
+
         logits = torch.cat(logits, dim=0)    # (batch_size * ent_num * ent_num,)
-
-
         loss = torch.tensor(0.0, device=logits.device)
         if triples is not None:
             # sub_s, sub_e, obj_s, obj_e, rel_id, sub_type, obj_type
             labels = self.get_filter_label(entities, triples, logits, map_dict)
 
-            # if self.config.use_filter_na_warm_up and mode == "train":
-            #     assert current_epoch is not None, "current_epoch must be not None when use_filter_na_warm_up is True"
-            #     sin_warm = lambda x: np.sin((min(1, x + 0.001) * np.pi / 2))
-            #     self.loss_weight[0] = float(self.config.get("na_filter_weight", 1)) * sin_warm(current_epoch / int(self.config.use_filter_na_warm_up))
-
             if self.config.use_filter_focal_loss:
                 scale_rate = int(self.config.use_filter_loss_sum) * 100
                 assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
                 loss_fct = focal_loss(alpha=self.config.use_focal_alpha, gamma=2, num_classes=self.tag_size, size_average=False)
-                loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 / self.loss_weight.sum() * self.tag_size
+                loss = loss_fct(logits, labels.long()) / scale_rate #  / self.config.batch_size * 16 #  / self.loss_weight.sum() * self.tag_size
 
             elif self.config.use_filter_loss_sum:
                 scale_rate = int(self.config.use_filter_loss_sum)
                 assert scale_rate > 0, "use_filter_loss_sum must be greater than 0"
                 loss_fct = nn.CrossEntropyLoss(reduction='sum', weight=self.loss_weight.to(logits.device)) # , label_smoothing=0.1
-                loss = loss_fct(logits, labels.long()) / scale_rate / self.config.batch_size * 16 #  / self.loss_weight.sum() * self.tag_size
+                loss = loss_fct(logits, labels.long()) / scale_rate #  / self.config.batch_size * 16 #  / self.loss_weight.sum() * self.tag_size
 
             else:
                 loss_fct = nn.CrossEntropyLoss(reduction='mean', weight=self.loss_weight.to(logits.device))
                 loss = loss_fct(logits, labels.long())
             pred = torch.argmax(logits, dim=-1)
-
-            # if self.config.use_filter_opt1 == "concat_pro":
-            #     reduction = 'sum' if self.config.use_filter_sum_loss else "mean"
-            #     loss_fct = nn.CrossEntropyLoss(reduction=reduction, weight=self.loss_weight.to(logits.device), label_smoothing=0.1)
-            #     loss = loss_fct(logits, labels.long())
-            #     pred = torch.argmax(logits, dim=-1)
-
-            # else:
-            #     reduction = 'sum' if self.config.use_filter_sum_loss else "mean"
-            #     loss_fct = nn.BCEWithLogitsLoss(reduction=reduction, weight=self.loss_weight.to(logits.device))
-            #     loss = loss_fct(logits, labels.float())
-            #     logits_sigmoid = logits.sigmoid()
-                # pred = torch.where(logits_sigmoid > 0.5, torch.ones_like(logits_sigmoid), torch.zeros_like(logits_sigmoid))
 
             if mode == 'train':
                 self.pred = pred if self.pred is None else torch.cat([self.pred, pred], dim=0)
@@ -352,9 +276,8 @@ class FilterModel(pl.LightningModule):
             self.labels_val = None
             debug.log(self.config.debug, self.val_metrics["f1"])
 
-
     def get_draft_ent_groups(self, entities, batch_idx, map_dict, logits, mode, pred=None):
-        '''Get the draft entity groups for each entity in the batch.'''
+        """Get the draft entity groups for each entity in the batch."""
 
         ent_groups = []
 
@@ -366,9 +289,9 @@ class FilterModel(pl.LightningModule):
                 random.shuffle(pairs)
 
             for sub_pos, obj_pos in pairs:
-                i = map_dict[(batch_idx, sub_pos[0])]
-                j = map_dict[(batch_idx, obj_pos[0])]
-                if i == j:
+                i = map_dict.get((batch_idx, sub_pos[0], sub_pos[1]))
+                j = map_dict.get((batch_idx, obj_pos[0], obj_pos[1]))
+                if i is None or j is None or i == j:
                     continue
                 index = self.convert_bij_to_index((batch_idx, i, j), entities)
                 score = logits[index].item()

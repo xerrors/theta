@@ -7,7 +7,7 @@ filter_lr: FLR
 batch_size: BS
 test_batch_size: TBS
 global_batch_size: GBS
-max_seq_len: MaxLen
+max_seq_len: L
 optimizer: Opt
 # use ner
 use_ner: NER
@@ -81,3 +81,5 @@ rel_max_len: RMax
 use_2_plm: Sep
 use_ner_prompt: NERPrompt
 use_rel_prompt: RELPrompt
+
+use_span_mention: Fspan

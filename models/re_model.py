@@ -162,8 +162,13 @@ class REModel(pl.LightningModule):
 
         return triple_labels
 
-    def prepare(self, theta, hidden_state, batch, entities, mode="train", return_loss=False):
+    def prepare(self, theta, hidden_state, batch, gold_entities=None, pred_entities=None, mode="train", return_loss=False):
         """Get hidden state for the 2nd stage: relation classification"""
+
+        if mode == "train" or return_loss == True:
+            entities = gold_entities
+        else:
+            entities = pred_entities
 
         ent_ids = theta.ent_ids
         device = hidden_state.device
@@ -193,6 +198,7 @@ class REModel(pl.LightningModule):
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, triples, mode, current_epoch=theta.current_epoch)
             labels = theta.filter.get_filter_label(entities, triples, logits, map_dict)
 
+            # statistic log with some bug
             if mode == "train":
                 for i in range(self.rel_type_num+1):
                     self.statistic[f"train_gold_label_{i}_count"] += (labels == i).sum().item()
@@ -209,7 +215,12 @@ class REModel(pl.LightningModule):
             logits, filter_loss, map_dict = theta.filter(hidden_state, entities, mode=mode, current_epoch=theta.current_epoch)
             labels = None
 
-        max_len= self.config.rel_max_len or 512 #  if mode == "train" else 1024
+        if mode == "train" and self.config.use_pred_ent_for_filter_training:
+            _, filter_loss, _ = theta.filter(hidden_state, pred_entities, triples, mode, current_epoch=theta.current_epoch)
+            # labels = theta.filter.get_filter_label(entities, triples, logits, map_dict)
+
+
+        max_len= self.config.rel_max_len or 300 #  if mode == "train" else 1024
         ent_groups = []
         bio_tags = []
         rel_input_ids = []
@@ -328,6 +339,8 @@ class REModel(pl.LightningModule):
                         count = labels_gold_count * 6 + 1 # 最少一个
                     elif strategy == "1109":
                         count = max(int(ent_count / 2), int(G - G * r + pred_count * r))
+                    elif strategy == "1231":
+                        count = max(int(np.round(ent_count / 2)), int(G - G * r + pred_count * r))
                     elif strategy == "1130":
                         count = max(5, int(G - G * r + pred_count * r))
                     # elif strategy == "1019":
@@ -755,13 +768,14 @@ class REModel(pl.LightningModule):
 
         return ent_groups, rel_hidden_states, triple_labels, filter_loss, sent_ner_loss
 
-    def forward(self, theta, batch, hidden_state, entities=None, return_loss=False, mode="train", with_score=False):
+    def forward(self, theta, batch, hidden_state, gold_entities=None, pred_entities=None, return_loss=False, mode="train", with_score=False):
 
         output = self.prepare(
                     theta=theta,
                     batch=batch,
                     hidden_state=hidden_state,
-                    entities=entities,
+                    gold_entities=gold_entities,
+                    pred_entities=pred_entities,
                     mode=mode,
                     return_loss=return_loss)
 

@@ -8,9 +8,8 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import wandb
-import utils
 from data.data_module import DataModule
-from xerrors import cprint
+from xerrors import cprint as cp
 
 import logging
 
@@ -60,6 +59,7 @@ def main(func_mode=False, **kwargs):
 
     # 加载 checkpoint 测试
     if config.test_from_ckpt:
+        ckpt_path = None
         if config.test_opt1 == "last":
             assert config.last_model_path is not None, "last_model_path is None"
             ckpt_path = config.last_model_path
@@ -67,20 +67,21 @@ def main(func_mode=False, **kwargs):
             ckpt_path = config.best_model_path
 
         # cprint.info("Test from checkpoint: ", ckpt_path)
-        trainer.test(ckpt_path=ckpt_path, model=theta, datamodule=data)
+        if ckpt_path:
+            trainer.test(ckpt_path=ckpt_path, model=theta, datamodule=data)
 
     else:
 
         if config.auto_lr:
-            print(utils.yellow("Auto LR Finding..."))
+            print(cp.yellow("Auto LR Finding..."))
             trainer.tune(theta, datamodule=data)  # with auto_lr_find=True
 
         trainer.fit(theta, datamodule=data)
         config.save_best_model_path(model_checkpoint.best_model_path)
         config.save_config()
 
-        # trainer.test(theta, datamodule=data)
-        trainer.test(theta, datamodule=data, ckpt_path=model_checkpoint.best_model_path)
+        if model_checkpoint.best_model_path:
+            trainer.test(theta, datamodule=data, ckpt_path=model_checkpoint.best_model_path)
         wandb.finish(quiet=True)
 
     result = {
